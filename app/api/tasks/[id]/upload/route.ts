@@ -1,0 +1,86 @@
+import { requireCurrentUser } from "@/lib/auth/session";
+import { getRepo } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import { responseError } from "@/lib/http";
+import { sanitizeImage } from "@/lib/image";
+import type { EvidenceType, WorkStatus } from "@/lib/types";
+
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const user = await requireCurrentUser("contractor");
+    const { id } = await context.params;
+    const repo = getRepo();
+    const project = await repo.getTaskProject(id);
+    if (!project) throw new HttpError(404, "Task not found");
+    if (project.contractor_id !== user.id) {
+      throw new HttpError(403, "Only the assigned contractor can upload evidence.");
+    }
+    const task = await repo.getTaskBundle(id);
+    if (!task) throw new HttpError(404, "Task not found");
+    if (["CAPTURED", "VOIDED", "AUTHORIZATION_EXPIRED"].includes(task.payment_status)) {
+      throw new HttpError(409, "Evidence is locked after payment settlement.");
+    }
+
+    const form = await request.formData();
+    const stageRaw = String(form.get("stage") || "");
+    if (!["before", "after", "reference"].includes(stageRaw)) {
+      throw new HttpError(400, "Evidence stage must be 'before', 'after', or 'reference'.");
+    }
+    const stage = stageRaw as EvidenceType;
+    const notes = String(form.get("notes") || "").slice(0, 500);
+    const file = form.get("file");
+    if (!(file instanceof File)) {
+      throw new HttpError(400, "Please attach an image file.");
+    }
+
+    const rawBytes = new Uint8Array(await file.arrayBuffer());
+    const clean = await sanitizeImage(rawBytes, file.type || undefined);
+
+    const saved = await repo.saveEvidence({
+      task_id: task.id,
+      uploaded_by: user.id,
+      evidence_type: stage,
+      mime_type: clean.type,
+      byte_size: clean.bytes.byteLength,
+      width: clean.width,
+      height: clean.height,
+      notes,
+      bytes: clean.bytes,
+      ext: clean.ext,
+    });
+
+    const updatedBundle = await repo.getTaskBundle(task.id);
+    const hasBefore = updatedBundle?.evidence.some((e) => e.evidence_type === "before") ?? false;
+    const hasAfter = updatedBundle?.evidence.some((e) => e.evidence_type === "after") ?? false;
+    const nextWork: WorkStatus =
+      hasBefore && hasAfter
+        ? "EVIDENCE_SUBMITTED"
+        : hasBefore
+        ? "BEFORE_SUBMITTED"
+        : task.work_status;
+
+    await repo.updateTaskWorkStatus(task.id, nextWork, {
+      contractor_notes: notes ? notes : task.contractor_notes,
+    });
+
+    await repo.recordPaymentEvent({
+      payment_record_id: task.payment.id,
+      task_id: task.id,
+      actor: "contractor",
+      event_type: `evidence_${stage}_uploaded`,
+      safe_metadata: {
+        evidence_id: saved.id,
+        mime_type: saved.mime_type,
+        width: saved.width,
+        height: saved.height,
+      },
+    });
+
+    return Response.json({ evidence: saved, workStatus: nextWork }, { status: 201 });
+  } catch (err) {
+    return responseError(err);
+  }
+}

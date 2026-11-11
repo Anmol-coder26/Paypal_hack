@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+.env*
+!.env.example
+.data/
+.paypal-sandbox-state.json
+test-results/
+playwright-report/
+*.tsbuildinfo
+next-env.d.ts
