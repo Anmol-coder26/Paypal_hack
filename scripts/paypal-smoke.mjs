@@ -143,10 +143,68 @@ async function main() {
     }
   }
 
-  const cap = await paypalFetch(clientId, secret, `/v2/payments/captures/${s.paint.captureId}`);
-  const paintAuth = await paypalFetch(clientId, secret, `/v2/payments/authorizations/${s.paint.authId}`);
-  const tileAuth = await paypalFetch(clientId, secret, `/v2/payments/authorizations/${s.tile.authId}`);
-  console.log(JSON.stringify({ paintCapture: cap.status, paintAuth: paintAuth.status, tileAuth: tileAuth.status }, null, 2));
+  if (!s.paint?.orderId || !s.paint?.authId || !s.paint?.captureId || !s.tile?.orderId || !s.tile?.authId) {
+    throw new Error("Incomplete smoke state: run sandbox:create and sandbox:settle first.");
+  }
+
+  const [paintOrder, tileOrder, cap, paintAuth, tileAuth] = await Promise.all([
+    paypalFetch(clientId, secret, `/v2/checkout/orders/${s.paint.orderId}`),
+    paypalFetch(clientId, secret, `/v2/checkout/orders/${s.tile.orderId}`),
+    paypalFetch(clientId, secret, `/v2/payments/captures/${s.paint.captureId}`),
+    paypalFetch(clientId, secret, `/v2/payments/authorizations/${s.paint.authId}`),
+    paypalFetch(clientId, secret, `/v2/payments/authorizations/${s.tile.authId}`),
+  ]);
+
+  const paintUnit = paintOrder.purchase_units?.[0];
+  const tileUnit = tileOrder.purchase_units?.[0];
+
+  const checks = [
+    [cap.id === s.paint.captureId, `Capture ID mismatch: ${cap.id}`],
+    [cap.status === "COMPLETED", `Expected paint capture COMPLETED, got ${cap.status}`],
+    [cap.amount?.currency_code === "USD" && cap.amount?.value === "30.00", `Expected paint capture 30.00 USD, got ${cap.amount?.value} ${cap.amount?.currency_code}`],
+    [cap.supplementary_data?.related_ids?.authorization_id === paintAuth.id, `Capture auth link mismatch`],
+    [paintAuth.id === s.paint.authId, `Paint Auth ID mismatch: ${paintAuth.id}`],
+    [paintAuth.status === "CAPTURED", `Expected paint auth CAPTURED, got ${paintAuth.status}`],
+    [paintAuth.amount?.currency_code === "USD" && paintAuth.amount?.value === "30.00", `Expected paint auth 30.00 USD, got ${paintAuth.amount?.value}`],
+    [(paintAuth.payee?.merchant_id || paintUnit?.payee?.merchant_id) === merchantId, `Paint payee merchant mismatch`],
+    [tileAuth.id === s.tile.authId, `Tile Auth ID mismatch: ${tileAuth.id}`],
+    [tileAuth.status === "VOIDED", `Expected tile auth VOIDED, got ${tileAuth.status}`],
+    [tileAuth.amount?.currency_code === "USD" && tileAuth.amount?.value === "20.00", `Expected tile auth 20.00 USD, got ${tileAuth.amount?.value}`],
+    [(tileAuth.payee?.merchant_id || tileUnit?.payee?.merchant_id) === merchantId, `Tile payee merchant mismatch`],
+  ];
+  for (const [ok, msg] of checks) {
+    if (!ok) throw new Error(`PayPal verification failed: ${msg}`);
+  }
+
+  console.log(
+    JSON.stringify(
+      {
+        verified: true,
+        run: s.run,
+        merchantId,
+        painting: {
+          orderId: paintOrder.id,
+          orderStatus: paintOrder.status,
+          authId: paintAuth.id,
+          authStatus: paintAuth.status,
+          captureId: cap.id,
+          captureStatus: cap.status,
+          amount: cap.amount,
+          payee: paintAuth.payee?.merchant_id || paintUnit?.payee?.merchant_id,
+        },
+        tileRepair: {
+          orderId: tileOrder.id,
+          orderStatus: tileOrder.status,
+          authId: tileAuth.id,
+          authStatus: tileAuth.status,
+          amount: tileAuth.amount,
+          payee: tileAuth.payee?.merchant_id || tileUnit?.payee?.merchant_id,
+        },
+      },
+      null,
+      2
+    )
+  );
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

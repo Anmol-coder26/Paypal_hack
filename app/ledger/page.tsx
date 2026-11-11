@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Download, RefreshCw, Search } from "lucide-react";
+import { PaymentLifecycleTimeline } from "@/components/payments/PaymentLifecycleTimeline";
 import { AppShell } from "@/components/shell/AppShell";
 import {
   Button,
@@ -44,7 +45,7 @@ export default function SettlementLedgerPage() {
   const [reconciling, setReconciling] = useState(false);
   const [toast, setToast] = useState("");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<LedgerEntry[]> => {
     try {
       const [meRes, ledRes] = await Promise.all([
         fetch("/api/auth/me", { cache: "no-store" }),
@@ -52,13 +53,15 @@ export default function SettlementLedgerPage() {
       ]);
       if (meRes.status === 401 || ledRes.status === 401) {
         router.push("/login");
-        return;
+        return [];
       }
       const meJson = await meRes.json();
       const ledJson = await ledRes.json();
+      const nextEntries = (ledJson.entries || []) as LedgerEntry[];
       setUser(meJson.user);
       setConfig(meJson.config);
-      setEntries(ledJson.entries || []);
+      setEntries(nextEntries);
+      return nextEntries;
     } finally {
       setLoading(false);
     }
@@ -133,7 +136,9 @@ export default function SettlementLedgerPage() {
       const res = await fetch(`/api/tasks/${entry.task.id}/reconcile`, { method: "POST" });
       const json = await res.json();
       setToast(json.message || json.error || "Reconciled");
-      await load();
+      const updated = await load();
+      const refreshed = updated.find((item) => item.task.id === entry.task.id);
+      if (refreshed) setSelected(refreshed);
     } finally {
       setReconciling(false);
     }
@@ -315,12 +320,15 @@ export default function SettlementLedgerPage() {
               </span>
             </div>
 
+            <PaymentLifecycleTimeline payment={selected.payment} compact />
+
             <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-4 font-mono-code">
               <p>Order ID: {selected.payment.paypal_order_id || "—"}</p>
               <p>Auth ID: {selected.payment.paypal_authorization_id || "—"}</p>
               <p>Capture ID: {selected.payment.paypal_capture_id || "—"}</p>
               <p>Payee Merchant: {selected.payment.payee_merchant_id || "—"}</p>
               <p>PayPal Status: {selected.payment.paypal_status || "—"}</p>
+              <p>Auth Expires: {formatDateTime(selected.payment.authorization_expires_at)}</p>
             </div>
 
             {selected.payment.paypal_order_id && (

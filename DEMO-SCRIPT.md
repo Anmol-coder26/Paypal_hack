@@ -17,15 +17,15 @@
 
 3. **0:55 – 1:35 · Contractor Uploads Evidence & Runs AI Inspection**
    - Click **Switch to Demo Contractor** in the sidebar.
-   - In **Contractor Workspace**, upload Before & After photos for **Painting** (clean wall repair) and click **Run AI Inspection**.
-   - Switch to **Tile Repair**, upload Before (cracked tile) & After (misaligned tile with open grout gap), and click **Run AI Inspection**.
-   - Show that both tasks advance cleanly to Step 4 (*AI Reviews Complete*).
+   - In **Contractor Desk**, select **Painting**, click **Load Sample Before** and **Load Sample After** (or upload your own photos through the Sharp sanitization pipeline), then click **Run AI Inspection**.
+   - Switch to **Tile Repair**, click **Load Sample Before** (cracked tile) and **Load Sample After** (misaligned tile with open grout gap), optionally drop a Before/After inspection pin, and click **Run AI Inspection**.
+   - Show the **End-to-End Settlement Pipeline** advances cleanly to Step 4 (*AI Reviews Complete*).
 
 4. **1:35 – 2:20 · Homeowner Reviews Findings & Settles Independently**
-   - Click **Switch to Demo Homeowner**.
-   - Open **Painting** (`/tasks/[id]`): drag the **Before ⟷ After** wipe slider, read AI's *Appears Satisfied* checklist, click **Accept & Capture $30.00** -> confirm dialog -> PayPal capture verified (`COMPLETED`).
-   - Open **Tile Repair** (`/tasks/[id]`): inspect AI's *Concerns Identified* + uncertainty notes, click **Reject & Void Hold** -> confirm dialog -> PayPal void verified (`VOIDED`).
+   - Click **Switch to Demo Homeowner** in the sidebar and open **Oak Street Living & Kitchen Closeout**.
+   - Open **Painting** (`/tasks/[id]`): drag the **Before ⟷ After** wipe slider (`2×` zoom & synchronized pins `#1`/`#2`), read AI's *Appears Satisfied* checklist, click **Accept & Capture $30.00** -> confirm dialog -> verify PayPal Capture (`COMPLETED`).
+   - Open **Tile Repair** (`/tasks/[id]`): inspect AI's *Concerns Identified* + uncertainty notes, click **Reject & Void Hold** -> confirm dialog -> verify PayPal Authorization Void (`VOIDED`).
 
 5. **2:20 – 2:45 · Closing Summary & Settlement Ledger**
-   - Return to `/projects/[id]` to show the **PayPal Settlement Verified** closing frame (`$50.00` total · `$30.00 captured` · `$20.00 voided` with real PayPal Order, Authorization, and Capture IDs).
-   - Open `/ledger`, refresh the browser to prove persistence, click a row for the Transaction Detail Drawer, and click **Export CSV**.
+   - Return to `/projects/[id]` to show the compact 4-stage PayPal lifecycle inside each task card and the **PayPal Settlement Verified** closing banner (`$50.00` total · `$30.00 Captured` · `$20.00 Voided` with persisted PayPal Order, Authorization, and Capture IDs).
+   - Open `/ledger`, press **Reload (`F5`)** to prove database persistence, click a row to inspect full PayPal timestamps & **Reconcile Status from PayPal** in the Transaction Record Drawer, and click **Export CSV**.

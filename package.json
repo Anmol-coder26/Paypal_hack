@@ -11,9 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "sandbox:create": "node --env-file=.env.local scripts/paypal-smoke.mjs create",
-    "sandbox:settle": "node --env-file=.env.local scripts/paypal-smoke.mjs settle",
-    "sandbox:verify": "node --env-file=.env.local scripts/paypal-smoke.mjs verify"
+    "sandbox:create": "node --env-file-if-exists=.env.local scripts/paypal-smoke.mjs create",
+    "sandbox:settle": "node --env-file-if-exists=.env.local scripts/paypal-smoke.mjs settle",
+    "sandbox:verify": "node --env-file-if-exists=.env.local scripts/paypal-smoke.mjs verify"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",

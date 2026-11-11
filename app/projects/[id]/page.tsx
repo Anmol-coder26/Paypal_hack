@@ -15,6 +15,7 @@ import {
 import { GuidedDemoTracker } from "@/components/demo/GuidedDemoTracker";
 import { AllocationBar } from "@/components/payments/AllocationBar";
 import { PayPalButtonSlot } from "@/components/payments/PayPalButtonSlot";
+import { PaymentLifecycleTimeline } from "@/components/payments/PaymentLifecycleTimeline";
 import { AppShell } from "@/components/shell/AppShell";
 import {
   Button,
@@ -373,6 +374,8 @@ function ProjectDetailContent() {
                       <PaymentStatusBadge status={task.payment_status} />
                       <WorkStatusBadge status={task.work_status} />
                     </div>
+
+                    <PaymentLifecycleTimeline payment={task.payment} compact />
 
                     <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 space-y-1">
                       <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
