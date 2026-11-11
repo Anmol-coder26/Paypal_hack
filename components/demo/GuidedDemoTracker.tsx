@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { Check, CheckCircle2, ShieldCheck, XCircle } from "lucide-react";
 import type { ProjectBundle } from "@/lib/types";
@@ -122,11 +123,14 @@ export function GuidedDemoTracker({ project }: { project: ProjectBundle }) {
                   PayPal Settlement Verified
                 </p>
                 <h3 className="text-lg font-semibold">
-                  Project Total: {formatMoney(totalMinor)}
+                  {project.title} Settlement
                 </h3>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Total agreed value: {formatMoney(totalMinor)}
+                </p>
               </div>
             </div>
-            <div className="flex gap-6 text-right">
+            <div className="flex flex-wrap items-center gap-6 text-right">
               <div>
                 <p className="text-[11px] text-slate-400">Captured</p>
                 <p className="text-base font-semibold text-emerald-400 tabular-nums">
@@ -145,18 +149,21 @@ export function GuidedDemoTracker({ project }: { project: ProjectBundle }) {
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
             {tasks.map((t) => {
               const captured = t.payment_status === "CAPTURED";
+              const expired = t.payment_status === "AUTHORIZATION_EXPIRED";
               return (
                 <div
                   key={t.id}
                   className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-2"
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="text-sm font-semibold">{t.title}</span>
                     <span
                       className={cn(
                         "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold",
                         captured
                           ? "bg-emerald-500/20 text-emerald-300"
+                          : expired
+                          ? "bg-red-500/20 text-red-300"
                           : "bg-slate-500/20 text-slate-300"
                       )}
                     >
@@ -165,8 +172,12 @@ export function GuidedDemoTracker({ project }: { project: ProjectBundle }) {
                       ) : (
                         <XCircle className="h-3.5 w-3.5" />
                       )}
-                      {formatMoney(t.amount_minor_units)}{" "}
-                      {captured ? "captured" : "authorization voided"}
+                      {formatMoney(t.amount_minor_units)} —{" "}
+                      {captured
+                        ? "Captured"
+                        : expired
+                        ? "Authorization Expired"
+                        : "Authorization Voided"}
                     </span>
                   </div>
                   <div className="space-y-1 font-mono-code text-[11px] text-slate-300">
@@ -175,16 +186,25 @@ export function GuidedDemoTracker({ project }: { project: ProjectBundle }) {
                     {t.payment.paypal_capture_id && (
                       <p>Capture: {t.payment.paypal_capture_id}</p>
                     )}
+                    <p>Payee: {t.payment.payee_merchant_id || "—"}</p>
                     <p>PayPal Status: {t.payment.paypal_status || t.payment_status}</p>
                   </div>
                 </div>
               );
             })}
           </div>
-          <p className="mt-4 text-xs text-slate-300">
-            Every figure above is derived from persisted PayPal Sandbox API records in the
-            PunchPay database — refreshing this page displays the same verified outcome.
-          </p>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-white/10">
+            <p className="text-xs text-slate-300">
+              Every figure above comes directly from persisted PayPal Sandbox API records in the
+              PunchPay database.
+            </p>
+            <Link
+              href="/ledger"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 transition-colors"
+            >
+              Open Settlement Ledger
+            </Link>
+          </div>
         </motion.div>
       )}
     </div>

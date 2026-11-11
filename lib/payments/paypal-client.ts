@@ -240,7 +240,7 @@ export class PayPalSandboxClient {
       ...(opts.body ? { body: JSON.stringify(opts.body) } : {}),
     });
     const text = await res.text();
-    let json: Record<string, unknown> | null = null;
+    let json: Record<string, unknown> | null;
     try {
       json = text ? (JSON.parse(text) as Record<string, unknown>) : null;
     } catch {

@@ -23,6 +23,9 @@ export async function POST(
     if (["CAPTURED", "VOIDED", "AUTHORIZATION_EXPIRED"].includes(task.payment_status)) {
       throw new HttpError(409, "Evidence is locked after payment settlement.");
     }
+    if (["ACCEPTED", "REJECTED"].includes(task.work_status)) {
+      throw new HttpError(409, "Evidence is locked after a final homeowner decision.");
+    }
 
     const form = await request.formData();
     const stageRaw = String(form.get("stage") || "");
@@ -35,6 +38,17 @@ export async function POST(
     if (!(file instanceof File)) {
       throw new HttpError(400, "Please attach an image file.");
     }
+
+    const hadBefore = task.evidence.some((e) => e.evidence_type === "before");
+    const hadAfter = task.evidence.some((e) => e.evidence_type === "after");
+    const willHaveBefore = hadBefore || stage === "before";
+    const willHaveAfter = hadAfter || stage === "after";
+    const nextWork: WorkStatus =
+      willHaveBefore && willHaveAfter
+        ? "EVIDENCE_SUBMITTED"
+        : willHaveBefore
+        ? "BEFORE_SUBMITTED"
+        : task.work_status;
 
     const rawBytes = new Uint8Array(await file.arrayBuffer());
     const clean = await sanitizeImage(rawBytes, file.type || undefined);
@@ -51,16 +65,6 @@ export async function POST(
       bytes: clean.bytes,
       ext: clean.ext,
     });
-
-    const updatedBundle = await repo.getTaskBundle(task.id);
-    const hasBefore = updatedBundle?.evidence.some((e) => e.evidence_type === "before") ?? false;
-    const hasAfter = updatedBundle?.evidence.some((e) => e.evidence_type === "after") ?? false;
-    const nextWork: WorkStatus =
-      hasBefore && hasAfter
-        ? "EVIDENCE_SUBMITTED"
-        : hasBefore
-        ? "BEFORE_SUBMITTED"
-        : task.work_status;
 
     await repo.updateTaskWorkStatus(task.id, nextWork, {
       contractor_notes: notes ? notes : task.contractor_notes,

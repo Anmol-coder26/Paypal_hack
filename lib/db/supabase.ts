@@ -499,6 +499,19 @@ export class SupabaseRepository implements PunchPayRepository {
     return data as EvidenceAnnotation;
   }
 
+  async getAnnotationById(
+    annotationId: string,
+    taskId: string
+  ): Promise<EvidenceAnnotation | null> {
+    const { data } = await this.client
+      .from("evidence_annotations")
+      .select("*")
+      .eq("id", annotationId)
+      .eq("task_id", taskId)
+      .maybeSingle();
+    return (data as EvidenceAnnotation) ?? null;
+  }
+
   async deleteAnnotation(annotationId: string, taskId: string): Promise<void> {
     await this.client
       .from("evidence_annotations")

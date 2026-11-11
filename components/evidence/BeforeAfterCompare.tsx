@@ -20,6 +20,7 @@ export function BeforeAfterCompare({
   after,
   allEvidence,
   annotations = [],
+  currentUserId,
   canAnnotate = false,
   canDelete,
   onDelete,
@@ -30,6 +31,7 @@ export function BeforeAfterCompare({
   after: EvidenceRecord | null;
   allEvidence: EvidenceRecord[];
   annotations?: EvidenceAnnotation[];
+  currentUserId?: string;
   canAnnotate?: boolean;
   canDelete?: boolean;
   onDelete?: (evidenceId: string) => void;
@@ -50,12 +52,14 @@ export function BeforeAfterCompare({
   const [pinLabel, setPinLabel] = useState("");
   const [pinSeverity, setPinSeverity] = useState<"info" | "concern" | "verified">("info");
   const [savingPin, setSavingPin] = useState(false);
+  const [pinError, setPinError] = useState("");
 
   function handleImageClick(
     e: React.MouseEvent<HTMLDivElement>,
     record: EvidenceRecord | null
   ) {
     if (!pinMode || !record || !taskId || !canAnnotate) return;
+    setPinError("");
     const rect = e.currentTarget.getBoundingClientRect();
     const xPct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
     const yPct = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
@@ -71,6 +75,7 @@ export function BeforeAfterCompare({
     e.preventDefault();
     if (!pendingPin || !taskId || !pinLabel.trim()) return;
     setSavingPin(true);
+    setPinError("");
     try {
       const res = await fetch(`/api/tasks/${taskId}/annotations`, {
         method: "POST",
@@ -83,11 +88,16 @@ export function BeforeAfterCompare({
           severity: pinSeverity,
         }),
       });
-      if (res.ok) {
-        setPendingPin(null);
-        setPinMode(false);
-        onAnnotationChange?.();
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPinError(json.error || `Could not save pin annotation (${res.status})`);
+        return;
       }
+      setPendingPin(null);
+      setPinMode(false);
+      onAnnotationChange?.();
+    } catch {
+      setPinError("Network error while saving pin annotation.");
     } finally {
       setSavingPin(false);
     }
@@ -95,17 +105,33 @@ export function BeforeAfterCompare({
 
   async function removePin(annotationId: string) {
     if (!taskId) return;
-    const res = await fetch(
-      `/api/tasks/${taskId}/annotations?annotationId=${encodeURIComponent(annotationId)}`,
-      { method: "DELETE" }
-    );
-    if (res.ok) {
+    setPinError("");
+    try {
+      const res = await fetch(
+        `/api/tasks/${taskId}/annotations?annotationId=${encodeURIComponent(annotationId)}`,
+        { method: "DELETE" }
+      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPinError(json.error || `Could not delete pin annotation (${res.status})`);
+        return;
+      }
       onAnnotationChange?.();
+    } catch {
+      setPinError("Network error while removing pin annotation.");
     }
   }
 
   return (
     <div className="space-y-4">
+      {pinError && (
+        <div
+          role="alert"
+          className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
+        >
+          {pinError}
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs font-medium text-slate-500">
           {before && after
@@ -212,7 +238,7 @@ export function BeforeAfterCompare({
               alt="After repair evidence"
               className={cn(
                 "absolute inset-0 h-full w-full object-contain transition-transform duration-200",
-                zoomed && "scale-150"
+                zoomed && "scale-200"
               )}
             />
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -221,7 +247,7 @@ export function BeforeAfterCompare({
               alt="Before repair evidence"
               className={cn(
                 "absolute inset-0 h-full w-full object-contain transition-transform duration-200",
-                zoomed && "scale-150"
+                zoomed && "scale-200"
               )}
               style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}
             />
@@ -259,7 +285,7 @@ export function BeforeAfterCompare({
               alt="Before repair base layer"
               className={cn(
                 "absolute inset-0 h-full w-full object-contain transition-transform duration-200",
-                zoomed && "scale-150"
+                zoomed && "scale-200"
               )}
             />
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -268,7 +294,7 @@ export function BeforeAfterCompare({
               alt="After repair onion-skin overlay"
               className={cn(
                 "absolute inset-0 h-full w-full object-contain transition-transform duration-200",
-                zoomed && "scale-150"
+                zoomed && "scale-200"
               )}
               style={{ opacity: overlayOpacity / 100 }}
             />
@@ -326,7 +352,7 @@ export function BeforeAfterCompare({
                       alt={`${label} photograph`}
                       className={cn(
                         "h-full w-full object-contain transition-transform duration-200",
-                        zoomed && "scale-150"
+                        zoomed && "scale-200"
                       )}
                     />
                   ) : (
@@ -335,23 +361,26 @@ export function BeforeAfterCompare({
                     </p>
                   )}
 
-                  {pins.map((pin, idx) => (
-                    <div
-                      key={pin.id}
-                      style={{ left: `${pin.x_pct}%`, top: `${pin.y_pct}%` }}
-                      title={`${pin.author_name} (${pin.author_role}): ${pin.label}`}
-                      className={cn(
-                        "absolute -translate-x-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white text-[11px] font-bold text-white shadow-md",
-                        pin.severity === "concern"
-                          ? "bg-red-600"
-                          : pin.severity === "verified"
-                          ? "bg-emerald-600"
-                          : "bg-blue-600"
-                      )}
-                    >
-                      {idx + 1}
-                    </div>
-                  ))}
+                  {pins.map((pin) => {
+                    const globalNum = annotations.findIndex((a) => a.id === pin.id) + 1;
+                    return (
+                      <div
+                        key={pin.id}
+                        style={{ left: `${pin.x_pct}%`, top: `${pin.y_pct}%` }}
+                        title={`#${globalNum} ${pin.author_name} (${pin.author_role}): ${pin.label}`}
+                        className={cn(
+                          "absolute -translate-x-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white text-[11px] font-bold text-white shadow-md",
+                          pin.severity === "concern"
+                            ? "bg-red-600"
+                            : pin.severity === "verified"
+                            ? "bg-emerald-600"
+                            : "bg-blue-600"
+                        )}
+                      >
+                        {globalNum}
+                      </div>
+                    );
+                  })}
 
                   {pendingPin && record && pendingPin.evidenceId === record.id && (
                     <div
@@ -456,7 +485,7 @@ export function BeforeAfterCompare({
                     ({ann.author_role})
                   </span>
                 </div>
-                {canAnnotate && (
+                {canAnnotate && (!currentUserId || ann.author_id === currentUserId) && (
                   <button
                     type="button"
                     onClick={() => removePin(ann.id)}

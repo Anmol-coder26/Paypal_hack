@@ -46,6 +46,10 @@ export default function ContractorWorkspacePage() {
         return;
       }
       const json = await res.json();
+      if (json.user?.role === "homeowner") {
+        router.push("/dashboard");
+        return;
+      }
       setUser(json.user);
       setConfig(json.config);
       const list = (json.projects || []) as ProjectBundle[];
@@ -195,10 +199,18 @@ export default function ContractorWorkspacePage() {
   }
 
   async function deleteEvidence(evidenceId: string) {
-    const res = await fetch(`/api/evidence/${evidenceId}`, { method: "DELETE" });
-    if (res.ok) {
+    setBanner(null);
+    try {
+      const res = await fetch(`/api/evidence/${evidenceId}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBanner({ text: json.error || `Could not delete photo (${res.status})`, ok: false });
+        return;
+      }
       setBanner({ text: "Evidence photo removed.", ok: true });
       await load();
+    } catch {
+      setBanner({ text: "Network error removing evidence photo.", ok: false });
     }
   }
 
@@ -484,6 +496,7 @@ export default function ContractorWorkspacePage() {
                     }
                     allEvidence={activeEntry.task.evidence}
                     annotations={activeEntry.task.annotations}
+                    currentUserId={user.id}
                     canAnnotate={
                       !["CAPTURED", "VOIDED", "AUTHORIZATION_EXPIRED"].includes(
                         activeEntry.task.payment_status

@@ -13,6 +13,7 @@ export default function SettingsPage() {
   const [config, setConfig] = useState<SystemConfigStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [creatingDemo, setCreatingDemo] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     fetch("/api/auth/me", { cache: "no-store" })
@@ -30,15 +31,18 @@ export default function SettingsPage() {
 
   async function launchDemo() {
     setCreatingDemo(true);
-    const res = await fetch("/api/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ guided_demo: true }),
-    });
-    const json = await res.json();
-    if (res.ok) {
+    setError("");
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guided_demo: true }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not create Guided Demo project");
       router.push(`/projects/${json.project.id}`);
-    } else {
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create Guided Demo project");
       setCreatingDemo(false);
     }
   }
@@ -64,6 +68,12 @@ export default function SettingsPage() {
             and AI Vision provider configuration.
           </p>
         </div>
+
+        {error && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+            {error}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <Card className="p-5 space-y-2">
@@ -131,11 +141,17 @@ NEXT_PUBLIC_PAYPAL_CLIENT_ID=your_sandbox_rest_client_id
 PAYPAL_MERCHANT_ID=contractor_sandbox_merchant_id
 PAYPAL_WEBHOOK_ID=sandbox_webhook_id   # Endpoint: /api/webhooks/paypal
 
+# App Origin & Session Security
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+SESSION_SECRET=replace_with_32_byte_random_hex
+
 # Multimodal AI Vision (set either Gemini OR Anthropic)
 GEMINI_API_KEY=your_gemini_api_key
 # ANTHROPIC_API_KEY=your_anthropic_api_key
 
-# Optional Supabase (omit to use zero-config SQLite persistence)
+# Optional Supabase (omit locally for SQLite; required for Vercel deploy)
+# NEXT_PUBLIC_SUPABASE_URL=
+# NEXT_PUBLIC_SUPABASE_ANON_KEY=
 # SUPABASE_URL=
 # SUPABASE_SERVICE_ROLE_KEY=`}
           </pre>

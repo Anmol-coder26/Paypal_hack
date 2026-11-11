@@ -211,12 +211,22 @@ export async function authorizeOrderForTask(
     payment_record_id: payment.id,
     operation_type: "authorize",
   });
-  if (!idem.acquired && idem.existing?.status === "SUCCEEDED") {
-    return {
-      authorizationId: payment.paypal_authorization_id,
-      status: payment.paypal_status,
-      already: true,
-    };
+  if (!idem.acquired) {
+    if (idem.existing?.status === "IN_PROGRESS") {
+      throw new HttpError(
+        409,
+        "A PayPal authorization request for this order is already in flight. Wait a moment and run Reconcile."
+      );
+    }
+    if (idem.existing?.status === "SUCCEEDED") {
+      return (
+        (idem.existing.response_json && { ...idem.existing.response_json, already: true }) || {
+          authorizationId: payment.paypal_authorization_id,
+          status: payment.paypal_status,
+          already: true,
+        }
+      );
+    }
   }
 
   try {
@@ -231,7 +241,7 @@ export async function authorizeOrderForTask(
 
     await repo.claimPaymentState(
       task.id,
-      ["ORDER_CREATED", "BUYER_APPROVAL_PENDING"],
+      ["ORDER_CREATED", "BUYER_APPROVAL_PENDING", "RECONCILIATION_REQUIRED"],
       "AUTHORIZED",
       {
         paypal_authorization_id: authorization.id,
@@ -266,8 +276,30 @@ export async function authorizeOrderForTask(
     await repo.finishIdempotency(opKey, "SUCCEEDED", result);
     return result;
   } catch (err) {
-    await repo.finishIdempotency(opKey, "FAILED");
-    throw err;
+    if (isDefinitelyNotSent(err)) {
+      await repo.finishIdempotency(opKey, "FAILED");
+      throw err;
+    }
+    const msg = err instanceof Error ? err.message : "PayPal authorization timed out";
+    await repo
+      .claimPaymentState(
+        task.id,
+        ["ORDER_CREATED", "BUYER_APPROVAL_PENDING"],
+        "RECONCILIATION_REQUIRED",
+        { last_error: msg.slice(0, 500) }
+      )
+      .catch(() => null);
+    await repo.recordPaymentEvent({
+      payment_record_id: payment.id,
+      task_id: task.id,
+      actor: "system",
+      event_type: "reconciliation_required",
+      safe_metadata: { error: msg.slice(0, 300), attempted: "authorize" },
+    });
+    throw new HttpError(
+      502,
+      `${msg}. Authorization outcome unconfirmed — use Reconcile Status instead of retrying.`
+    );
   }
 }
 
@@ -567,8 +599,11 @@ export async function reconcileTaskPayment(
   const payment = task.payment;
 
   if (
-    ["ORDER_CREATED", "BUYER_APPROVAL_PENDING"].includes(payment.payment_status) &&
-    payment.paypal_order_id
+    ["ORDER_CREATED", "BUYER_APPROVAL_PENDING", "RECONCILIATION_REQUIRED"].includes(
+      payment.payment_status
+    ) &&
+    payment.paypal_order_id &&
+    !payment.paypal_authorization_id
   ) {
     const order = await pp.getOrder(payment.paypal_order_id);
     assertOrderMatchesTask(order, {
@@ -578,11 +613,12 @@ export async function reconcileTaskPayment(
     });
     const auth = order.purchase_units?.[0]?.payments?.authorizations?.[0];
     if (!auth) {
+      await repo.finishIdempotency(`authorize:${order.id}`, "FAILED");
       await repo.claimPaymentState(
         task.id,
-        ["ORDER_CREATED", "BUYER_APPROVAL_PENDING"],
+        ["ORDER_CREATED", "BUYER_APPROVAL_PENDING", "RECONCILIATION_REQUIRED"],
         "BUYER_APPROVAL_PENDING",
-        { paypal_status: order.status }
+        { paypal_status: order.status, last_error: null }
       );
       return {
         paymentStatus: "BUYER_APPROVAL_PENDING",
@@ -610,7 +646,7 @@ export async function reconcileTaskPayment(
 
     await repo.claimPaymentState(
       task.id,
-      ["ORDER_CREATED", "BUYER_APPROVAL_PENDING"],
+      ["ORDER_CREATED", "BUYER_APPROVAL_PENDING", "RECONCILIATION_REQUIRED"],
       nextStatus,
       {
         paypal_authorization_id: verified.id,
@@ -620,6 +656,17 @@ export async function reconcileTaskPayment(
         authorization_expires_at: verified.expiration_time ?? null,
         last_error: null,
       }
+    );
+    await repo.finishIdempotency(
+      `authorize:${order.id}`,
+      nextStatus === "AUTHORIZED" ? "SUCCEEDED" : "FAILED",
+      nextStatus === "AUTHORIZED"
+        ? {
+            authorizationId: verified.id,
+            status: verified.status,
+            expiresAt: verified.expiration_time ?? null,
+          }
+        : undefined
     );
     await repo.recordPaymentEvent({
       payment_record_id: payment.id,
@@ -644,8 +691,9 @@ export async function reconcileTaskPayment(
     throw new HttpError(409, "No PayPal order or authorization recorded for this task yet.");
   }
 
+  const authId = payment.paypal_authorization_id;
   const auth = await pp.verifiedAuthorization(
-    payment.paypal_authorization_id,
+    authId,
     task.amount_minor_units,
     payment.paypal_order_id
   );
@@ -674,6 +722,17 @@ export async function reconcileTaskPayment(
         event_type: "reconciled_capture",
         safe_metadata: { capture_id: capture.id, status: capture.status },
       });
+    }
+    if (nextStatus === "CAPTURED") {
+      await repo.finishIdempotency(`capture:${authId}`, "SUCCEEDED", {
+        workStatus: "ACCEPTED",
+        paymentStatus: "CAPTURED",
+        captureId: capture.id,
+        paypalStatus: capture.status,
+      });
+      await repo.finishIdempotency(`void:${authId}`, "FAILED");
+    } else if (nextStatus === "PAYMENT_FAILED") {
+      await repo.finishIdempotency(`capture:${authId}`, "FAILED");
     }
     await maybeCompleteProject(project.id);
     return {
@@ -707,6 +766,20 @@ export async function reconcileTaskPayment(
     });
   }
 
+  // Reconcile any lingering IN_PROGRESS idempotency rows based on PayPal ground truth
+  if (nextStatus === "VOIDED") {
+    await repo.finishIdempotency(`void:${auth.id}`, "SUCCEEDED", {
+      workStatus: "REJECTED",
+      paymentStatus: "VOIDED",
+      authorizationId: auth.id,
+      paypalStatus: auth.status,
+    });
+    await repo.finishIdempotency(`capture:${auth.id}`, "FAILED");
+  } else if (nextStatus === "AUTHORIZED" || nextStatus === "AUTHORIZATION_EXPIRED") {
+    await repo.finishIdempotency(`capture:${auth.id}`, "FAILED");
+    await repo.finishIdempotency(`void:${auth.id}`, "FAILED");
+  }
+
   await maybeCompleteProject(project.id);
   return {
     paymentStatus: nextStatus,
@@ -716,24 +789,35 @@ export async function reconcileTaskPayment(
   };
 }
 
-export async function processPayPalWebhook(headers: Headers, rawBody: string) {
+export async function processPayPalWebhook(
+  headers: Headers,
+  rawBody: string,
+  paypalOverride?: PayPalSandboxClient
+) {
   const cfg = getPayPalClientConfig();
-  const pp = requirePayPalClient();
-  if (!cfg.webhookId) {
+  const pp = requirePayPalClient(paypalOverride);
+  if (!cfg.webhookId && !paypalOverride) {
     throw new HttpError(503, "PAYPAL_WEBHOOK_ID is not configured on the server.");
   }
-  const event = JSON.parse(rawBody) as {
+
+  let event: {
     id?: string;
     event_type?: string;
     resource?: {
       id?: string;
       status?: string;
+      expiration_time?: string;
       supplementary_data?: { related_ids?: { order_id?: string; authorization_id?: string } };
     };
   };
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    throw new HttpError(400, "Invalid JSON webhook payload.");
+  }
 
   const verified = await pp.verifyWebhookSignature({
-    webhookId: cfg.webhookId,
+    webhookId: cfg.webhookId || "TEST_WEBHOOK",
     headers,
     event,
   });
@@ -772,13 +856,66 @@ export async function processPayPalWebhook(headers: Headers, rawBody: string) {
     return { received: true, matched: true, duplicate: true };
   }
 
-  // Update payment state safely based on webhook event type
-  if (event.event_type === "PAYMENT.AUTHORIZATION.VOIDED" && payment.payment_status !== "VOIDED") {
+  const authId = payment.paypal_authorization_id || related?.authorization_id || resourceId;
+  const taskBundle = await repo.getTaskBundle(payment.task_id);
+  const project = await repo.getTaskProject(payment.task_id);
+
+  // Update payment & idempotency state safely based on PayPal webhook event type
+  if (
+    event.event_type === "PAYMENT.AUTHORIZATION.CREATED" &&
+    ["ORDER_CREATED", "BUYER_APPROVAL_PENDING", "RECONCILIATION_REQUIRED"].includes(
+      payment.payment_status
+    )
+  ) {
+    await repo
+      .claimPaymentState(payment.task_id, [payment.payment_status], "AUTHORIZED", {
+        paypal_authorization_id: resourceId || payment.paypal_authorization_id,
+        paypal_status: "CREATED",
+        authorization_expires_at:
+          event.resource?.expiration_time ?? payment.authorization_expires_at,
+        last_error: null,
+      })
+      .catch(() => null);
+  } else if (
+    event.event_type === "PAYMENT.AUTHORIZATION.VOIDED" &&
+    payment.payment_status !== "VOIDED"
+  ) {
     await repo
       .claimPaymentState(payment.task_id, [payment.payment_status], "VOIDED", {
         paypal_status: "VOIDED",
+        last_error: null,
       })
       .catch(() => null);
+    if (
+      taskBundle &&
+      ["EVIDENCE_SUBMITTED", "AI_REVIEWED", "CORRECTIONS_REQUESTED"].includes(
+        taskBundle.work_status
+      )
+    ) {
+      await repo.updateTaskWorkStatus(payment.task_id, "REJECTED").catch(() => null);
+    }
+    if (authId) {
+      await repo.finishIdempotency(`void:${authId}`, "SUCCEEDED", {
+        workStatus: "REJECTED",
+        paymentStatus: "VOIDED",
+        authorizationId: authId,
+        paypalStatus: "VOIDED",
+      });
+    }
+  } else if (
+    event.event_type === "PAYMENT.AUTHORIZATION.EXPIRED" &&
+    payment.payment_status !== "AUTHORIZATION_EXPIRED"
+  ) {
+    await repo
+      .claimPaymentState(payment.task_id, [payment.payment_status], "AUTHORIZATION_EXPIRED", {
+        paypal_status: "EXPIRED",
+        last_error: "PayPal authorization expired",
+      })
+      .catch(() => null);
+    if (authId) {
+      await repo.finishIdempotency(`capture:${authId}`, "FAILED");
+      await repo.finishIdempotency(`void:${authId}`, "FAILED");
+    }
   } else if (
     event.event_type === "PAYMENT.CAPTURE.COMPLETED" &&
     payment.payment_status !== "CAPTURED"
@@ -787,8 +924,43 @@ export async function processPayPalWebhook(headers: Headers, rawBody: string) {
       .claimPaymentState(payment.task_id, [payment.payment_status], "CAPTURED", {
         paypal_capture_id: resourceId || payment.paypal_capture_id,
         paypal_status: "COMPLETED",
+        last_error: null,
       })
       .catch(() => null);
+    if (
+      taskBundle &&
+      ["EVIDENCE_SUBMITTED", "AI_REVIEWED", "CORRECTIONS_REQUESTED"].includes(
+        taskBundle.work_status
+      )
+    ) {
+      await repo.updateTaskWorkStatus(payment.task_id, "ACCEPTED").catch(() => null);
+    }
+    if (authId) {
+      await repo.finishIdempotency(`capture:${authId}`, "SUCCEEDED", {
+        workStatus: "ACCEPTED",
+        paymentStatus: "CAPTURED",
+        captureId: resourceId || payment.paypal_capture_id,
+        paypalStatus: "COMPLETED",
+      });
+    }
+  } else if (
+    (event.event_type === "PAYMENT.CAPTURE.DENIED" ||
+      event.event_type === "PAYMENT.CAPTURE.DECLINED") &&
+    payment.payment_status !== "CAPTURED"
+  ) {
+    await repo
+      .claimPaymentState(payment.task_id, [payment.payment_status], "PAYMENT_FAILED", {
+        paypal_status: event.resource?.status || "DECLINED",
+        last_error: `PayPal reported ${event.event_type}`,
+      })
+      .catch(() => null);
+    if (authId) {
+      await repo.finishIdempotency(`capture:${authId}`, "FAILED");
+    }
+  }
+
+  if (project) {
+    await maybeCompleteProject(project.id);
   }
 
   return { received: true, matched: true, duplicate: false };

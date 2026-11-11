@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Edit3,
@@ -28,9 +29,11 @@ import {
 import type { Profile, ProjectBundle, SystemConfigStatus, TaskBundle } from "@/lib/types";
 import { formatMoney } from "@/lib/utils";
 
-export default function ProjectDetailPage() {
+function ProjectDetailContent() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const handledReturnRef = useRef<string | null>(null);
 
   const [user, setUser] = useState<Profile | null>(null);
   const [config, setConfig] = useState<SystemConfigStatus | null>(null);
@@ -77,6 +80,46 @@ export default function ProjectDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Handle redirect returns from PayPal Checkout (?paypalReturn=1&taskId=...)
+  useEffect(() => {
+    const isReturn = searchParams.get("paypalReturn") === "1";
+    const returnedTaskId = searchParams.get("taskId");
+    if (!isReturn || !returnedTaskId || loading || !user || user.role !== "homeowner") {
+      return;
+    }
+    if (handledReturnRef.current === returnedTaskId) return;
+    handledReturnRef.current = returnedTaskId;
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/tasks/${returnedTaskId}/authorize`, {
+          method: "POST",
+        });
+        const json = await res.json().catch(() => ({}));
+        if (res.ok && json.authorizationId) {
+          setToast(
+            `PayPal return completed: Authorization ${json.authorizationId} (${json.status}).`
+          );
+        } else {
+          const rec = await fetch(`/api/tasks/${returnedTaskId}/reconcile`, {
+            method: "POST",
+          });
+          const recJson = await rec.json().catch(() => ({}));
+          if (rec.ok) {
+            setToast(recJson.message || "Reconciled PayPal checkout return.");
+          } else {
+            setError(json.error || recJson.error || "PayPal checkout did not authorize.");
+          }
+        }
+      } catch {
+        setError("Could not verify PayPal return status. Try Sync PayPal on the task.");
+      } finally {
+        router.replace(`/projects/${id}`);
+        await load();
+      }
+    })();
+  }, [searchParams, loading, user, id, router, load]);
 
   function openNewTaskModal() {
     setEditingTask(null);
@@ -355,6 +398,36 @@ export default function ProjectDetailPage() {
                         </strong>
                       </span>
                     </div>
+
+                    {(task.payment.paypal_order_id ||
+                      task.payment.paypal_authorization_id ||
+                      task.payment.paypal_capture_id) && (
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono-code text-[11px] text-slate-600 space-y-0.5">
+                        {task.payment.paypal_order_id && (
+                          <p className="truncate">Order: {task.payment.paypal_order_id}</p>
+                        )}
+                        {task.payment.paypal_authorization_id && (
+                          <p className="truncate">Auth: {task.payment.paypal_authorization_id}</p>
+                        )}
+                        {task.payment.paypal_capture_id && (
+                          <p className="truncate text-emerald-700 font-semibold">
+                            Capture: {task.payment.paypal_capture_id}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {["RECONCILIATION_REQUIRED", "CAPTURE_PENDING", "VOID_PENDING"].includes(
+                      task.payment_status
+                    ) && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 flex items-center gap-2">
+                        <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                        <span>
+                          Outcome pending PayPal confirmation. Use <strong>Sync PayPal</strong>{" "}
+                          (read-only GET) instead of retrying.
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
@@ -521,5 +594,13 @@ export default function ProjectDetailPage() {
         )}
       </Modal>
     </AppShell>
+  );
+}
+
+export default function ProjectDetailPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50" />}>
+      <ProjectDetailContent />
+    </Suspense>
   );
 }

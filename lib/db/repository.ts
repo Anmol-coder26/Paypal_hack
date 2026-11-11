@@ -128,6 +128,10 @@ export interface PunchPayRepository {
     label: string;
     severity: "info" | "concern" | "verified";
   }): Promise<import("../types").EvidenceAnnotation>;
+  getAnnotationById(
+    annotationId: string,
+    taskId: string
+  ): Promise<import("../types").EvidenceAnnotation | null>;
   deleteAnnotation(annotationId: string, taskId: string): Promise<void>;
 
   // AI Reviews

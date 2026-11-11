@@ -836,6 +836,16 @@ export class SqliteRepository implements PunchPayRepository {
     return { id, ...input, created_at };
   }
 
+  async getAnnotationById(
+    annotationId: string,
+    taskId: string
+  ): Promise<EvidenceAnnotation | null> {
+    const row = this.db
+      .prepare("SELECT * FROM evidence_annotations WHERE id = ? AND task_id = ?")
+      .get(annotationId, taskId) as EvidenceAnnotation | undefined;
+    return row ?? null;
+  }
+
   async deleteAnnotation(annotationId: string, taskId: string): Promise<void> {
     this.db
       .prepare("DELETE FROM evidence_annotations WHERE id = ? AND task_id = ?")

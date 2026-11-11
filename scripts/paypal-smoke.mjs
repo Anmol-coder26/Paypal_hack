@@ -103,7 +103,7 @@ async function main() {
   }
 
   if (cmd === "settle") {
-    for (const [slug, item] of Object.entries(ITEMS)) {
+    for (const slug of Object.keys(ITEMS)) {
       if (!s[slug]?.orderId) throw new Error("Run sandbox:create first");
       const order = await paypalFetch(clientId, secret, `/v2/checkout/orders/${s[slug].orderId}`);
       if (!s[slug].authId) {

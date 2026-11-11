@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import sharp from "sharp";
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 const SCREENSHOT_DIR = path.resolve(__dirname, "../docs/screenshots");
@@ -9,7 +9,7 @@ test.beforeAll(() => {
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 });
 
-test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persistence, and responsive layouts", async ({
+test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persistence, accessibility, and responsive layouts", async ({
   page,
 }, testInfo) => {
   const consoleErrors: string[] = [];
@@ -22,11 +22,15 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
     }
   });
 
-  // 1. Landing Page
+  // 1. Landing Page + Accessibility Check
   await page.goto("/");
   await expect(
     page.getByRole("heading", { name: /Pay for the work that's done/i })
   ).toBeVisible();
+  const landingAxe = await new AxeBuilder({ page }).analyze();
+  expect(
+    landingAxe.violations.filter((v) => v.impact === "critical" || v.impact === "serious")
+  ).toEqual([]);
   if (testInfo.project.name === "desktop") {
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, "01-landing-desktop.png"),
@@ -106,7 +110,11 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
     page.getByRole("heading", { name: /Settings & Sandbox Diagnostics/i })
   ).toBeVisible();
 
-  // 6. Switch to Demo Contractor, use Demo Photo Kit & Drop Inspection Pin
+  // Verify Homeowner navigating directly to /contractor is redirected cleanly back to /dashboard
+  await page.goto("/contractor");
+  await page.waitForURL("**/dashboard");
+
+  // 6. Switch to Demo Contractor, use Demo Photo Kit & Drop Pins on BOTH photos
   await page.goto("/login");
   await page.getByRole("button", { name: /Demo Contractor/i }).click();
   await page.waitForURL("**/contractor");
@@ -117,22 +125,34 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
   await page.getByRole("button", { name: "Load Sample After" }).click();
   await expect(page.getByText(/AFTER photo uploaded/i)).toBeVisible();
 
-  // Drop a visual inspection pin on the Before Repair photo
+  // Drop Pin #1 on Before Repair photo
   await page.getByRole("button", { name: /Drop Pin/i }).click();
   const beforeImg = page.getByAltText("Before Repair photograph");
   await beforeImg.scrollIntoViewIfNeeded();
   await beforeImg.click({ position: { x: 80, y: 60 } });
   await page
     .getByPlaceholder(/Open grout gap/i)
-    .fill("Scuff mark repaired and blended");
+    .fill("Original wall scuff documented");
   await page.getByRole("button", { name: /Save Pin Annotation/i }).click();
-  await expect(page.getByText("Scuff mark repaired and blended")).toBeVisible();
+  await expect(page.getByText("Original wall scuff documented")).toBeVisible();
 
-  // Reload and confirm both 800x600 Demo Kit PNGs + pin annotation persist
+  // Drop Pin #2 on After Repair photo -> must render unified badge #2 on photo
+  await page.getByRole("button", { name: /Drop Pin/i }).click();
+  const afterImg = page.getByAltText("After Repair photograph");
+  await afterImg.scrollIntoViewIfNeeded();
+  await afterImg.click({ position: { x: 100, y: 80 } });
+  await page
+    .getByPlaceholder(/Open grout gap/i)
+    .fill("Uniform repaint verified");
+  await page.getByRole("button", { name: /Save Pin Annotation/i }).click();
+  await expect(page.getByText("Uniform repaint verified")).toBeVisible();
+  await expect(page.getByTitle(/#2 /i)).toBeVisible();
+
+  // Reload and confirm both 800x600 Demo Kit PNGs + both pins persist
   await page.reload();
   await expect(page.getByAltText("Before Repair photograph")).toBeVisible();
   await expect(page.getByAltText("After Repair photograph")).toBeVisible();
-  await expect(page.getByText("Scuff mark repaired and blended")).toBeVisible();
+  await expect(page.getByText("Uniform repaint verified")).toBeVisible();
 
   if (testInfo.project.name === "desktop") {
     await page.screenshot({
@@ -141,7 +161,9 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
     });
   }
 
-  // Test Wipe and Overlay comparison toggles
+  // Test Wipe, Overlay and 2x Zoom comparison toggles
+  await page.getByRole("button", { name: "2×" }).click();
+  await expect(page.getByRole("button", { name: "1×" })).toBeVisible();
   await page.getByRole("button", { name: "Wipe" }).click();
   await expect(page.getByLabel(/Before and after comparison position/i)).toBeVisible();
   await page.getByRole("button", { name: "Overlay" }).click();
@@ -167,9 +189,6 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
       fullPage: true,
     });
   }
-
-  // Suppress sharp unused import lint if removed
-  void sharp;
 
   expect(consoleErrors).toEqual([]);
 });

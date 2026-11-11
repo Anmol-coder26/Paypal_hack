@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { cookies } from "next/headers";
 import { getRepo, isSupabaseConfigured } from "../db";
 import { DEMO_ACCOUNTS, hashPassword, verifyPassword } from "../db/sqlite";
@@ -9,8 +11,40 @@ import type { Profile, SystemConfigStatus, UserRole } from "../types";
 export const SESSION_COOKIE_NAME = "punchpay_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 
+let cachedLocalSecret: string | null = null;
+
 function getSessionSecret(): string {
-  return process.env.SESSION_SECRET || "punchpay-local-dev-session-secret-change-in-prod";
+  if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.trim().length >= 16) {
+    return process.env.SESSION_SECRET;
+  }
+  if (
+    process.env.VERCEL === "1" ||
+    isSupabaseConfigured() ||
+    process.env.PUNCHPAY_REQUIRE_SESSION_SECRET === "1"
+  ) {
+    throw new HttpError(
+      500,
+      "SESSION_SECRET environment variable must be configured (min 16 characters) in hosted environments."
+    );
+  }
+  if (cachedLocalSecret) return cachedLocalSecret;
+  const dbPath =
+    process.env.PUNCHPAY_DB_PATH || path.join(process.cwd(), ".data", "punchpay.db");
+  const secretPath = path.join(path.dirname(dbPath), ".session-secret");
+  fs.mkdirSync(path.dirname(secretPath), { recursive: true });
+  try {
+    const existing = fs.readFileSync(secretPath, "utf8").trim();
+    if (existing.length >= 32) {
+      cachedLocalSecret = existing;
+      return existing;
+    }
+  } catch {
+    // Generate on first run
+  }
+  const generated = crypto.randomBytes(32).toString("hex");
+  fs.writeFileSync(secretPath, generated, { mode: 0o600 });
+  cachedLocalSecret = generated;
+  return generated;
 }
 
 function hashSessionToken(rawToken: string): string {

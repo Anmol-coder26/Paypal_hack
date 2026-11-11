@@ -50,7 +50,24 @@ export async function DELETE(
     if (task && ["CAPTURED", "VOIDED", "AUTHORIZATION_EXPIRED"].includes(task.payment_status)) {
       throw new HttpError(409, "Evidence cannot be deleted after payment settlement");
     }
+    if (task && ["ACCEPTED", "REJECTED"].includes(task.work_status)) {
+      throw new HttpError(409, "Evidence cannot be deleted after a final homeowner decision");
+    }
     await repo.deleteEvidence(id);
+    if (task && ["PENDING_EVIDENCE", "BEFORE_SUBMITTED", "EVIDENCE_SUBMITTED"].includes(task.work_status)) {
+      const remaining = task.evidence.filter((e) => e.id !== id);
+      const hasBefore = remaining.some((e) => e.evidence_type === "before");
+      const hasAfter = remaining.some((e) => e.evidence_type === "after");
+      const nextWork =
+        hasBefore && hasAfter
+          ? "EVIDENCE_SUBMITTED"
+          : hasBefore
+          ? "BEFORE_SUBMITTED"
+          : "PENDING_EVIDENCE";
+      if (nextWork !== task.work_status) {
+        await repo.updateTaskWorkStatus(task.id, nextWork);
+      }
+    }
     return Response.json({ ok: true });
   } catch (err) {
     return responseError(err);

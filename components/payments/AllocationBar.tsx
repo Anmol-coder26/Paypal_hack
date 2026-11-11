@@ -13,24 +13,31 @@ export function AllocationBar({ tasks }: { tasks: TaskBundle[] }) {
     .filter((t) => t.payment_status === "CAPTURED")
     .reduce((s, t) => s + t.amount_minor_units, 0);
   const authorized = tasks
+    .filter((t) => t.payment_status === "AUTHORIZED")
+    .reduce((s, t) => s + t.amount_minor_units, 0);
+  const attention = tasks
     .filter((t) =>
       [
-        "AUTHORIZED",
+        "ORDER_CREATED",
+        "BUYER_APPROVAL_PENDING",
         "SETTLEMENT_PENDING",
         "CAPTURE_PENDING",
         "VOID_PENDING",
         "RECONCILIATION_REQUIRED",
+        "PAYMENT_FAILED",
+        "AUTHORIZATION_EXPIRED",
       ].includes(t.payment_status)
     )
     .reduce((s, t) => s + t.amount_minor_units, 0);
   const voided = tasks
     .filter((t) => t.payment_status === "VOIDED")
     .reduce((s, t) => s + t.amount_minor_units, 0);
-  const draft = Math.max(0, total - captured - authorized - voided);
+  const draft = Math.max(0, total - captured - authorized - attention - voided);
 
   const segments = [
     { label: "Captured", amount: captured, color: "bg-emerald-500", dot: "bg-emerald-500" },
     { label: "Authorized Hold", amount: authorized, color: "bg-blue-600", dot: "bg-blue-600" },
+    { label: "Pending / Attention", amount: attention, color: "bg-amber-500", dot: "bg-amber-500" },
     { label: "Voided", amount: voided, color: "bg-slate-400", dot: "bg-slate-400" },
     { label: "Draft / Unfunded", amount: draft, color: "bg-slate-200", dot: "bg-slate-300" },
   ];

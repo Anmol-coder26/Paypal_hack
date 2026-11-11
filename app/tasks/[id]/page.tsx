@@ -54,6 +54,7 @@ export default function TaskInspectionPage() {
   // Confirmation modal for homeowner decisions
   const [confirmDecision, setConfirmDecision] = useState<DecisionAction | null>(null);
   const [decisionReason, setDecisionReason] = useState("");
+  const [selectedReviewVersion, setSelectedReviewVersion] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -222,7 +223,11 @@ export default function TaskInspectionPage() {
 
   const before = task.evidence.find((e) => e.evidence_type === "before") || null;
   const after = task.evidence.find((e) => e.evidence_type === "after") || null;
-  const findings = task.latest_review?.structured_findings;
+  const activeReview =
+    (selectedReviewVersion !== null
+      ? task.reviews.find((r) => r.review_version === selectedReviewVersion)
+      : null) ?? task.latest_review;
+  const findings = activeReview?.structured_findings;
   const isSettled = ["CAPTURED", "VOIDED", "AUTHORIZATION_EXPIRED"].includes(
     task.payment_status
   );
@@ -238,6 +243,13 @@ export default function TaskInspectionPage() {
     ["DRAFT", "ORDER_CREATED", "BUYER_APPROVAL_PENDING", "PAYMENT_FAILED"].includes(
       task.payment_status
     );
+
+  const needsReconciliation = [
+    "RECONCILIATION_REQUIRED",
+    "CAPTURE_PENDING",
+    "VOID_PENDING",
+    "PAYMENT_FAILED",
+  ].includes(task.payment_status);
 
   return (
     <AppShell user={user} config={config}>
@@ -304,6 +316,61 @@ export default function TaskInspectionPage() {
 
           <PaymentLifecycleTimeline payment={task.payment} />
 
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4 text-xs">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-slate-500">PayPal Order ID</p>
+              <p className="mt-0.5 font-mono-code font-medium text-slate-900 break-all">
+                {task.payment.paypal_order_id || "—"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-slate-500">Authorization ID</p>
+              <p className="mt-0.5 font-mono-code font-medium text-slate-900 break-all">
+                {task.payment.paypal_authorization_id || "—"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-slate-500">Capture ID</p>
+              <p className="mt-0.5 font-mono-code font-medium text-slate-900 break-all">
+                {task.payment.paypal_capture_id || "—"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-slate-500">Verified Payee Merchant</p>
+              <p className="mt-0.5 font-mono-code font-medium text-slate-900 break-all">
+                {task.payment.payee_merchant_id || "Pending order"}
+              </p>
+            </div>
+          </div>
+
+          {needsReconciliation && task.payment.paypal_order_id && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-950">
+              <div className="flex items-start gap-2 max-w-xl">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold">
+                    PayPal Outcome Pending Read-Only Verification ({task.payment_status})
+                  </p>
+                  <p className="mt-0.5 text-amber-900">
+                    PunchPay parked this operation instead of blindly retrying a payment mutation.
+                    Run GET reconciliation to inspect PayPal&apos;s actual state safely.
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy === "reconcile"}
+                onClick={reconcilePayment}
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${busy === "reconcile" ? "animate-spin" : ""}`}
+                />
+                Run Safe GET Reconcile
+              </Button>
+            </div>
+          )}
+
           {canAuthorize && (
             <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 space-y-2">
               <p className="text-xs font-semibold text-slate-900">
@@ -341,6 +408,7 @@ export default function TaskInspectionPage() {
                 after={after}
                 allEvidence={task.evidence}
                 annotations={task.annotations}
+                currentUserId={user.id}
                 canAnnotate={!isSettled}
                 onAnnotationChange={load}
               />
@@ -426,6 +494,29 @@ export default function TaskInspectionPage() {
                 </Button>
               </div>
 
+              {task.reviews.length > 1 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="text-slate-500 font-medium">History:</span>
+                  {task.reviews.map((rev) => {
+                    const active = activeReview?.review_version === rev.review_version;
+                    return (
+                      <button
+                        key={rev.id}
+                        type="button"
+                        onClick={() => setSelectedReviewVersion(rev.review_version)}
+                        className={`rounded-md border px-2 py-0.5 text-[11px] font-mono-code cursor-pointer ${
+                          active
+                            ? "border-blue-600 bg-blue-50 text-blue-700 font-semibold"
+                            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        v{rev.review_version}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {!config.ai.configured && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
                   <strong>AI Provider Not Configured:</strong> Add <code>GEMINI_API_KEY</code>{" "}
@@ -457,7 +548,7 @@ export default function TaskInspectionPage() {
                         {findings.overall_assessment.replaceAll("_", " ")}
                       </span>
                       <span className="font-mono-code text-[11px] opacity-80">
-                        v{task.latest_review?.review_version} · {task.latest_review?.model}
+                        v{activeReview?.review_version} · {activeReview?.model}
                       </span>
                     </div>
                     <p className="mt-2 leading-relaxed">{findings.summary}</p>

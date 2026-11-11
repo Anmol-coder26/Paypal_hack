@@ -32,6 +32,10 @@ export async function POST(
         { status: 400 }
       );
     }
+    const ev = await repo.getEvidenceById(parsed.data.evidence_id);
+    if (!ev || ev.task_id !== id) {
+      throw new HttpError(400, "Evidence photograph does not belong to this repair task.");
+    }
     const annotation = await repo.addAnnotation({
       task_id: id,
       evidence_id: parsed.data.evidence_id,
@@ -65,6 +69,13 @@ export async function DELETE(
     const annotationId = url.searchParams.get("annotationId");
     if (!annotationId) {
       throw new HttpError(400, "annotationId query parameter is required");
+    }
+    const ann = await repo.getAnnotationById(annotationId, id);
+    if (!ann) {
+      throw new HttpError(404, "Pin annotation not found");
+    }
+    if (ann.author_id !== user.id) {
+      throw new HttpError(403, "Only the author who created this annotation can remove it.");
     }
     await repo.deleteAnnotation(annotationId, id);
     return Response.json({ ok: true });
