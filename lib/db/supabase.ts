@@ -5,6 +5,7 @@ import { assertPaymentTransition, assertWorkTransition } from "../payments/state
 import type {
   AIReviewRecord,
   DecisionRecord,
+  EvidenceAnnotation,
   EvidenceRecord,
   PaymentEvent,
   PaymentRecord,
@@ -140,30 +141,41 @@ export class SupabaseRepository implements PunchPayRepository {
 
   private async hydrateTask(task: Record<string, unknown>): Promise<TaskBundle> {
     const taskId = String(task.id);
-    const [{ data: payment }, { data: evRows }, { data: reviews }, { data: decisions }, { data: events }] =
-      await Promise.all([
-        this.client.from("payment_records").select("*").eq("task_id", taskId).single(),
-        this.client
-          .from("evidence")
-          .select("*")
-          .eq("task_id", taskId)
-          .order("created_at", { ascending: false }),
-        this.client
-          .from("ai_reviews")
-          .select("*")
-          .eq("task_id", taskId)
-          .order("review_version", { ascending: false }),
-        this.client
-          .from("decisions")
-          .select("*")
-          .eq("task_id", taskId)
-          .order("created_at", { ascending: false }),
-        this.client
-          .from("payment_events")
-          .select("*")
-          .eq("task_id", taskId)
-          .order("created_at", { ascending: false }),
-      ]);
+    const [
+      { data: payment },
+      { data: evRows },
+      { data: annRows },
+      { data: reviews },
+      { data: decisions },
+      { data: events },
+    ] = await Promise.all([
+      this.client.from("payment_records").select("*").eq("task_id", taskId).single(),
+      this.client
+        .from("evidence")
+        .select("*")
+        .eq("task_id", taskId)
+        .order("created_at", { ascending: false }),
+      this.client
+        .from("evidence_annotations")
+        .select("*")
+        .eq("task_id", taskId)
+        .order("created_at", { ascending: true }),
+      this.client
+        .from("ai_reviews")
+        .select("*")
+        .eq("task_id", taskId)
+        .order("review_version", { ascending: false }),
+      this.client
+        .from("decisions")
+        .select("*")
+        .eq("task_id", taskId)
+        .order("created_at", { ascending: false }),
+      this.client
+        .from("payment_events")
+        .select("*")
+        .eq("task_id", taskId)
+        .order("created_at", { ascending: false }),
+    ]);
 
     const evidence = ((evRows as EvidenceRecord[]) ?? []).map((e) => ({
       ...e,
@@ -192,6 +204,7 @@ export class SupabaseRepository implements PunchPayRepository {
       updated_at: String(task.updated_at),
       payment: payment as PaymentRecord,
       evidence,
+      annotations: (annRows as EvidenceAnnotation[]) ?? [],
       latest_review: parsedReviews[0] ?? null,
       reviews: parsedReviews,
       decisions: (decisions as DecisionRecord[]) ?? [],
@@ -464,6 +477,34 @@ export class SupabaseRepository implements PunchPayRepository {
     if (!ev) return;
     await this.client.storage.from(EVIDENCE_BUCKET).remove([ev.image_storage_path]);
     await this.client.from("evidence").delete().eq("id", id);
+  }
+
+  async addAnnotation(input: {
+    task_id: string;
+    evidence_id: string;
+    author_id: string;
+    author_name: string;
+    author_role: UserRole;
+    x_pct: number;
+    y_pct: number;
+    label: string;
+    severity: "info" | "concern" | "verified";
+  }): Promise<EvidenceAnnotation> {
+    const { data, error } = await this.client
+      .from("evidence_annotations")
+      .insert(input)
+      .select("*")
+      .single();
+    if (error || !data) throw new HttpError(500, "Failed to save annotation");
+    return data as EvidenceAnnotation;
+  }
+
+  async deleteAnnotation(annotationId: string, taskId: string): Promise<void> {
+    await this.client
+      .from("evidence_annotations")
+      .delete()
+      .eq("id", annotationId)
+      .eq("task_id", taskId);
   }
 
   async saveAIReview(input: {

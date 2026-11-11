@@ -117,6 +117,18 @@ export interface PunchPayRepository {
   getEvidenceById(id: string): Promise<EvidenceRecord | null>;
   readEvidenceBytes(storagePath: string): Promise<{ bytes: Buffer; mimeType: string } | null>;
   deleteEvidence(id: string): Promise<void>;
+  addAnnotation(input: {
+    task_id: string;
+    evidence_id: string;
+    author_id: string;
+    author_name: string;
+    author_role: UserRole;
+    x_pct: number;
+    y_pct: number;
+    label: string;
+    severity: "info" | "concern" | "verified";
+  }): Promise<import("../types").EvidenceAnnotation>;
+  deleteAnnotation(annotationId: string, taskId: string): Promise<void>;
 
   // AI Reviews
   saveAIReview(input: {

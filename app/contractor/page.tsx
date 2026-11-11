@@ -202,6 +202,26 @@ export default function ContractorWorkspacePage() {
     }
   }
 
+  async function uploadDemoSample(
+    taskId: string,
+    stage: "before" | "after",
+    publicPath: string
+  ) {
+    setBusyAction(`demo-${stage}`);
+    setBanner(null);
+    try {
+      const resp = await fetch(publicPath);
+      const blob = await resp.blob();
+      const file = new File([blob], publicPath.split("/").pop() || `${stage}.png`, {
+        type: "image/png",
+      });
+      uploadFileWithProgress(taskId, stage, file);
+    } catch {
+      setBusyAction(null);
+      setBanner({ text: "Could not load sample test photo.", ok: false });
+    }
+  }
+
   if (loading || !user || !config) {
     return (
       <div className="min-h-screen bg-slate-50 p-8 max-w-6xl mx-auto space-y-4">
@@ -407,8 +427,53 @@ export default function ContractorWorkspacePage() {
                     </div>
                   )}
 
+                  {!["CAPTURED", "VOIDED", "AUTHORIZATION_EXPIRED"].includes(
+                    activeEntry.task.payment_status
+                  ) && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="font-medium text-slate-700">
+                        Demo Photo Kit (Real 800×600 PNGs → uploads through Sharp pipeline):
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={Boolean(busyAction)}
+                          onClick={() =>
+                            uploadDemoSample(
+                              activeEntry.task.id,
+                              "before",
+                              activeEntry.task.title.toLowerCase().includes("tile")
+                                ? "/demo-kit/tile-before.png"
+                                : "/demo-kit/painting-before.png"
+                            )
+                          }
+                        >
+                          Load Sample Before
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={Boolean(busyAction)}
+                          onClick={() =>
+                            uploadDemoSample(
+                              activeEntry.task.id,
+                              "after",
+                              activeEntry.task.title.toLowerCase().includes("tile")
+                                ? "/demo-kit/tile-after-issue.png"
+                                : "/demo-kit/painting-after.png"
+                            )
+                          }
+                        >
+                          Load Sample After
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Uploaded Previews */}
                   <BeforeAfterCompare
+                    taskId={activeEntry.task.id}
                     before={
                       activeEntry.task.evidence.find((e) => e.evidence_type === "before") ||
                       null
@@ -418,12 +483,19 @@ export default function ContractorWorkspacePage() {
                       null
                     }
                     allEvidence={activeEntry.task.evidence}
+                    annotations={activeEntry.task.annotations}
+                    canAnnotate={
+                      !["CAPTURED", "VOIDED", "AUTHORIZATION_EXPIRED"].includes(
+                        activeEntry.task.payment_status
+                      )
+                    }
                     canDelete={
                       !["CAPTURED", "VOIDED", "AUTHORIZATION_EXPIRED"].includes(
                         activeEntry.task.payment_status
                       )
                     }
                     onDelete={deleteEvidence}
+                    onAnnotationChange={load}
                   />
 
                   {/* Work Notes */}

@@ -7,6 +7,7 @@ import { assertPaymentTransition, assertWorkTransition } from "../payments/state
 import type {
   AIReviewRecord,
   DecisionRecord,
+  EvidenceAnnotation,
   EvidenceRecord,
   PaymentEvent,
   PaymentRecord,
@@ -210,6 +211,20 @@ export class SqliteRepository implements PunchPayRepository {
         response_json TEXT,
         created_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS evidence_annotations (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES repair_tasks(id) ON DELETE CASCADE,
+        evidence_id TEXT NOT NULL REFERENCES evidence(id) ON DELETE CASCADE,
+        author_id TEXT NOT NULL REFERENCES profiles(id),
+        author_name TEXT NOT NULL,
+        author_role TEXT NOT NULL,
+        x_pct REAL NOT NULL,
+        y_pct REAL NOT NULL,
+        label TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
     `);
   }
 
@@ -391,6 +406,10 @@ export class SqliteRepository implements PunchPayRepository {
       created_at: String(e.created_at),
     }));
 
+    const annotations = this.db
+      .prepare("SELECT * FROM evidence_annotations WHERE task_id = ? ORDER BY created_at ASC")
+      .all(taskId) as unknown as EvidenceAnnotation[];
+
     return {
       id: taskId,
       project_id: String(taskRow.project_id),
@@ -407,6 +426,7 @@ export class SqliteRepository implements PunchPayRepository {
       updated_at: String(taskRow.updated_at),
       payment,
       evidence,
+      annotations,
       latest_review: reviews[0] ?? null,
       reviews,
       decisions,
@@ -780,6 +800,46 @@ export class SqliteRepository implements PunchPayRepository {
     this.db.prepare("DELETE FROM evidence WHERE id = ?").run(id);
     const fullPath = path.join(this.evidenceDir, path.basename(ev.image_storage_path));
     if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+  }
+
+  async addAnnotation(input: {
+    task_id: string;
+    evidence_id: string;
+    author_id: string;
+    author_name: string;
+    author_role: UserRole;
+    x_pct: number;
+    y_pct: number;
+    label: string;
+    severity: "info" | "concern" | "verified";
+  }): Promise<EvidenceAnnotation> {
+    const id = crypto.randomUUID();
+    const created_at = nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO evidence_annotations (id, task_id, evidence_id, author_id, author_name, author_role, x_pct, y_pct, label, severity, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        input.task_id,
+        input.evidence_id,
+        input.author_id,
+        input.author_name,
+        input.author_role,
+        input.x_pct,
+        input.y_pct,
+        input.label,
+        input.severity,
+        created_at
+      );
+    return { id, ...input, created_at };
+  }
+
+  async deleteAnnotation(annotationId: string, taskId: string): Promise<void> {
+    this.db
+      .prepare("DELETE FROM evidence_annotations WHERE id = ? AND task_id = ?")
+      .run(annotationId, taskId);
   }
 
   async saveAIReview(input: {

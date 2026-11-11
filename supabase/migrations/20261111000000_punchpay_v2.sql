@@ -142,11 +142,27 @@ create table if not exists public.idempotency_operations (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.evidence_annotations (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references public.repair_tasks(id) on delete cascade,
+  evidence_id uuid not null references public.evidence(id) on delete cascade,
+  author_id uuid not null references public.profiles(id) on delete restrict,
+  author_name text not null,
+  author_role text not null check (author_role in ('homeowner', 'contractor')),
+  x_pct double precision not null check (x_pct >= 0 and x_pct <= 100),
+  y_pct double precision not null check (y_pct >= 0 and y_pct <= 100),
+  label text not null,
+  severity text not null check (severity in ('info', 'concern', 'verified')),
+  created_at timestamptz not null default now()
+);
+create index if not exists evidence_annotations_task_idx on public.evidence_annotations (task_id, created_at asc);
+
 alter table public.profiles enable row level security;
 alter table public.sessions enable row level security;
 alter table public.projects enable row level security;
 alter table public.repair_tasks enable row level security;
 alter table public.evidence enable row level security;
+alter table public.evidence_annotations enable row level security;
 alter table public.ai_reviews enable row level security;
 alter table public.payment_records enable row level security;
 alter table public.payment_events enable row level security;
@@ -154,8 +170,8 @@ alter table public.decisions enable row level security;
 alter table public.idempotency_operations enable row level security;
 
 revoke all on public.profiles, public.sessions, public.projects, public.repair_tasks,
-  public.evidence, public.ai_reviews, public.payment_records, public.payment_events,
-  public.decisions, public.idempotency_operations from anon, authenticated;
+  public.evidence, public.evidence_annotations, public.ai_reviews, public.payment_records,
+  public.payment_events, public.decisions, public.idempotency_operations from anon, authenticated;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('punchpay-evidence', 'punchpay-evidence', false, 4194304, array['image/jpeg', 'image/png', 'image/webp'])

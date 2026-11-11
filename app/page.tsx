@@ -91,6 +91,13 @@ export default function LandingPage() {
                 >
                   Explore How It Works
                 </a>
+                <Link
+                  href="/playground"
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition-colors"
+                >
+                  <Sparkles className="h-4 w-4 text-blue-400" />
+                  PayPal Fault Lab
+                </Link>
               </div>
               <p className="text-xs text-slate-500">
                 Built on PayPal Sandbox Orders v2 (AUTHORIZE) &amp; Payments v2

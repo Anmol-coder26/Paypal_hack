@@ -12,6 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { GuidedDemoTracker } from "@/components/demo/GuidedDemoTracker";
+import { AllocationBar } from "@/components/payments/AllocationBar";
 import { PayPalButtonSlot } from "@/components/payments/PayPalButtonSlot";
 import { AppShell } from "@/components/shell/AppShell";
 import {
@@ -277,6 +278,8 @@ export default function ProjectDetailPage() {
             </div>
           </div>
         </Card>
+
+        <AllocationBar tasks={project.tasks} />
 
         {/* 6-step pipeline tracker & verified closing summary */}
         <GuidedDemoTracker project={project} />

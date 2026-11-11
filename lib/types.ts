@@ -164,9 +164,24 @@ export interface DecisionRecord {
   created_at: string;
 }
 
+export interface EvidenceAnnotation {
+  id: string;
+  task_id: string;
+  evidence_id: string;
+  author_id: string;
+  author_name: string;
+  author_role: UserRole;
+  x_pct: number;
+  y_pct: number;
+  label: string;
+  severity: "info" | "concern" | "verified";
+  created_at: string;
+}
+
 export interface TaskBundle extends RepairTask {
   payment: PaymentRecord;
   evidence: EvidenceRecord[];
+  annotations: EvidenceAnnotation[];
   latest_review: AIReviewRecord | null;
   reviews: AIReviewRecord[];
   decisions: DecisionRecord[];

@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Sparkles,
 } from "lucide-react";
+import { AllocationBar } from "@/components/payments/AllocationBar";
 import { AppShell } from "@/components/shell/AppShell";
 import {
   Button,
@@ -268,6 +269,8 @@ export default function HomeownerDashboardPage() {
             </Card>
           ))}
         </section>
+
+        <AllocationBar tasks={metrics.allTasks} />
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           {/* Active Projects */}

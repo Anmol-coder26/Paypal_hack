@@ -72,7 +72,7 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
   await page.getByRole("button", { name: /Guided Demo/i }).click();
   await page.waitForURL(/\/projects\/[0-9a-f-]{36}$/);
   await expect(page.getByText("Oak Street Living & Kitchen Closeout")).toBeVisible();
-  await expect(page.getByText("$50.00")).toBeVisible();
+  await expect(page.getByText("$50.00").first()).toBeVisible();
 
   if (testInfo.project.name === "desktop") {
     await page.screenshot({
@@ -106,42 +106,33 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
     page.getByRole("heading", { name: /Settings & Sandbox Diagnostics/i })
   ).toBeVisible();
 
-  // 6. Switch to Demo Contractor and upload real before/after PNGs
+  // 6. Switch to Demo Contractor, use Demo Photo Kit & Drop Inspection Pin
   await page.goto("/login");
   await page.getByRole("button", { name: /Demo Contractor/i }).click();
   await page.waitForURL("**/contractor");
   await expect(page.getByRole("heading", { name: "Contractor Workspace" })).toBeVisible();
 
-  const beforePng = await sharp({
-    create: { width: 120, height: 90, channels: 3, background: { r: 190, g: 185, b: 175 } },
-  })
-    .png()
-    .toBuffer();
-  const afterPng = await sharp({
-    create: { width: 120, height: 90, channels: 3, background: { r: 235, g: 235, b: 230 } },
-  })
-    .png()
-    .toBuffer();
-
-  const inputs = page.locator('input[type="file"]');
-  await inputs.nth(0).setInputFiles({
-    name: "before.png",
-    mimeType: "image/png",
-    buffer: beforePng,
-  });
+  await page.getByRole("button", { name: "Load Sample Before" }).click();
   await expect(page.getByText(/BEFORE photo uploaded/i)).toBeVisible();
-
-  await inputs.nth(1).setInputFiles({
-    name: "after.png",
-    mimeType: "image/png",
-    buffer: afterPng,
-  });
+  await page.getByRole("button", { name: "Load Sample After" }).click();
   await expect(page.getByText(/AFTER photo uploaded/i)).toBeVisible();
 
-  // Reload and confirm evidence persists
+  // Drop a visual inspection pin on the Before Repair photo
+  await page.getByRole("button", { name: /Drop Pin/i }).click();
+  const beforeImg = page.getByAltText("Before Repair photograph");
+  await beforeImg.scrollIntoViewIfNeeded();
+  await beforeImg.click({ position: { x: 80, y: 60 } });
+  await page
+    .getByPlaceholder(/Open grout gap/i)
+    .fill("Scuff mark repaired and blended");
+  await page.getByRole("button", { name: /Save Pin Annotation/i }).click();
+  await expect(page.getByText("Scuff mark repaired and blended")).toBeVisible();
+
+  // Reload and confirm both 800x600 Demo Kit PNGs + pin annotation persist
   await page.reload();
   await expect(page.getByAltText("Before Repair photograph")).toBeVisible();
   await expect(page.getByAltText("After Repair photograph")).toBeVisible();
+  await expect(page.getByText("Scuff mark repaired and blended")).toBeVisible();
 
   if (testInfo.project.name === "desktop") {
     await page.screenshot({
@@ -149,6 +140,36 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
       fullPage: true,
     });
   }
+
+  // Test Wipe and Overlay comparison toggles
+  await page.getByRole("button", { name: "Wipe" }).click();
+  await expect(page.getByLabel(/Before and after comparison position/i)).toBeVisible();
+  await page.getByRole("button", { name: "Overlay" }).click();
+  await expect(page.getByLabel(/Onion-skin opacity/i)).toBeVisible();
+
+  // 7. Interactive PayPal Fault-Injection & Idempotency Lab (/playground)
+  await page.goto("/playground");
+  await expect(
+    page.getByRole("heading", { name: /PayPal Settlement & Fault-Recovery Lab/i })
+  ).toBeVisible();
+
+  await page.getByLabel(/Drop HTTP response after next Capture/i).check();
+  await page.getByRole("button", { name: /1\. Authorize Hold/i }).first().click();
+  await page.getByRole("button", { name: /2\. Submit Photos \+ AI/i }).first().click();
+  await page.getByRole("button", { name: /3a\. Capture/i }).first().click();
+  await expect(page.getByText(/RECONCILIATION_REQUIRED/i).first()).toBeVisible();
+  await page.getByRole("button", { name: /GET Reconcile Status/i }).click();
+  await expect(page.getByText(/1 capture\(s\)/i)).toBeVisible();
+
+  if (testInfo.project.name === "desktop") {
+    await page.screenshot({
+      path: path.join(SCREENSHOT_DIR, "06-paypal-fault-lab-desktop.png"),
+      fullPage: true,
+    });
+  }
+
+  // Suppress sharp unused import lint if removed
+  void sharp;
 
   expect(consoleErrors).toEqual([]);
 });

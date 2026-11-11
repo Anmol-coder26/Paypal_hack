@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   CreditCard,
   FileSearch,
+  FlaskConical,
   FolderKanban,
   Hammer,
   LayoutDashboard,
@@ -56,6 +57,7 @@ export function AppShell({
           { href: "/payments", label: "Payment Control", icon: CreditCard },
           { href: "/reviews", label: "Evidence Reviews", icon: FileSearch },
           { href: "/ledger", label: "Settlement Ledger", icon: ReceiptText },
+          { href: "/playground", label: "PayPal Fault Lab", icon: FlaskConical },
           { href: "/settings", label: "Settings & Demo", icon: Settings },
         ]
       : [
@@ -63,6 +65,7 @@ export function AppShell({
           { href: "/reviews", label: "Evidence Reviews", icon: FileSearch },
           { href: "/payments", label: "Payment Status", icon: CreditCard },
           { href: "/ledger", label: "Settlement Ledger", icon: ReceiptText },
+          { href: "/playground", label: "PayPal Fault Lab", icon: FlaskConical },
           { href: "/settings", label: "Settings & Demo", icon: Settings },
         ];
 

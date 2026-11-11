@@ -336,9 +336,13 @@ export default function TaskInspectionPage() {
               </div>
 
               <BeforeAfterCompare
+                taskId={task.id}
                 before={before}
                 after={after}
                 allEvidence={task.evidence}
+                annotations={task.annotations}
+                canAnnotate={!isSettled}
+                onAnnotationChange={load}
               />
 
               {user.role === "contractor" && !isSettled && (

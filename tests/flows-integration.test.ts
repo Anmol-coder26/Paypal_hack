@@ -299,5 +299,25 @@ describe("PunchPay 2.0 End-to-End Integration Flows", () => {
       .reduce((s, e) => s + e.payment.amount_minor_units, 0);
     expect(totalCaptured).toBe(3000);
     expect(totalVoided).toBe(2000);
+
+    // Pin annotations persist on task bundle
+    const tileAfter = await repo.getTaskBundle(tile.id);
+    const evId = tileAfter!.evidence[0].id;
+    const pin = await repo.addAnnotation({
+      task_id: tile.id,
+      evidence_id: evId,
+      author_id: homeowner.id,
+      author_name: homeowner.name,
+      author_role: "homeowner",
+      x_pct: 42.5,
+      y_pct: 61.0,
+      label: "Wide dark gap along right joint",
+      severity: "concern",
+    });
+    const hydrated = await repo.getTaskBundle(tile.id);
+    expect(hydrated!.annotations.some((a) => a.id === pin.id)).toBe(true);
+    await repo.deleteAnnotation(pin.id, tile.id);
+    const afterDel = await repo.getTaskBundle(tile.id);
+    expect(afterDel!.annotations.length).toBe(0);
   });
 });
