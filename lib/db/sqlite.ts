@@ -86,7 +86,9 @@ export class SqliteRepository implements PunchPayRepository {
     const resolvedDb =
       dbFilePath ||
       process.env.PUNCHPAY_DB_PATH ||
-      path.join(process.cwd(), ".data", "punchpay.db");
+      (process.env.VERCEL === "1"
+        ? path.join("/tmp", "punchpay.db")
+        : path.join(process.cwd(), ".data", "punchpay.db"));
     const dir = path.dirname(resolvedDb);
     fs.mkdirSync(dir, { recursive: true });
     this.evidenceDir = path.join(dir, "evidence");

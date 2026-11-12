@@ -2,6 +2,9 @@
   "name": "punchpay-v2",
   "version": "2.0.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "author": "Anmol Singh <251868717+Anmol-coder26@users.noreply.github.com>",
   "repository": {
     "type": "git",
