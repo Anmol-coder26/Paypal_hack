@@ -44,6 +44,14 @@ export interface CreateProjectInput {
   }>;
 }
 
+export interface UpdateProjectInput {
+  title?: string;
+  description?: string;
+  location?: string;
+  due_date?: string | null;
+  contractor_id?: string;
+}
+
 export interface UpdateTaskInput {
   title?: string;
   description?: string;
@@ -102,6 +110,12 @@ export interface PunchPayRepository {
   listProjectsForUser(user: Profile): Promise<ProjectBundle[]>;
   getProjectBundle(projectId: string): Promise<ProjectBundle | null>;
   createProject(input: CreateProjectInput): Promise<ProjectBundle>;
+  updateProjectDetails(projectId: string, input: UpdateProjectInput): Promise<ProjectBundle>;
+  resetGuidedDemo(
+    homeownerId: string,
+    contractorId: string,
+    paymentMode: PaymentMode
+  ): Promise<ProjectBundle>;
   updateProjectStatus(projectId: string, status: Project["status"]): Promise<void>;
   addTask(
     projectId: string,
@@ -180,6 +194,7 @@ export interface PunchPayRepository {
         | "sim_intent_id"
         | "sim_authorization_id"
         | "sim_capture_id"
+        | "sim_void_id"
         | "sim_status"
         | "payee_merchant_id"
         | "order_attempt"
@@ -245,4 +260,47 @@ export interface PunchPayRepository {
       events: PaymentEvent[];
     }>
   >;
+}
+
+export function buildGuidedDemoProjectInput(opts: {
+  homeownerId: string;
+  contractorId: string;
+  paymentMode: PaymentMode;
+}): CreateProjectInput {
+  return {
+    homeowner_id: opts.homeownerId,
+    contractor_id: opts.contractorId,
+    title: "Kitchen Renovation Closeout",
+    description:
+      "Guided closeout project: two independent repairs with separate authorization holds, photo evidence inspection, and homeowner-controlled capture or void.",
+    location: "Austin, TX",
+    due_date: new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10),
+    is_guided_demo: true,
+    payment_mode: opts.paymentMode,
+    tasks: [
+      {
+        title: "Painting",
+        description:
+          "Repair and repaint the scuffed drywall beside the north window to blend smoothly with the adjacent wall.",
+        acceptance_criteria: [
+          "Coverage looks uniform",
+          "No obvious unpainted patches",
+          "Edges appear clean in supplied photographs",
+        ],
+        amount_minor_units: 3000,
+      },
+      {
+        title: "Tile Repair",
+        description:
+          "Replace the cracked kitchen backsplash tile near the sink and finish surrounding grout lines.",
+        acceptance_criteria: [
+          "Damaged tile replaced",
+          "Alignment consistent",
+          "No obvious visible gaps",
+          "Finishing appears complete",
+        ],
+        amount_minor_units: 2000,
+      },
+    ],
+  };
 }

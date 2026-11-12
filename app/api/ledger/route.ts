@@ -32,6 +32,7 @@ export async function GET(request: Request) {
         "Sim Intent ID",
         "Sim Authorization ID",
         "Sim Capture ID",
+        "Sim Void ID",
         "Payee Merchant ID",
         "Work Status",
       ];
@@ -49,6 +50,7 @@ export async function GET(request: Request) {
         e.payment.sim_intent_id || "",
         e.payment.sim_authorization_id || "",
         e.payment.sim_capture_id || "",
+        e.payment.sim_void_id || "",
         e.payment.payee_merchant_id || "",
         e.task.work_status,
       ]);

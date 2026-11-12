@@ -14,6 +14,14 @@ const AddTaskSchema = z.object({
   contractor_notes: z.string().max(500).optional(),
 });
 
+const EditProjectSchema = z.object({
+  title: z.string().min(3).max(140).optional(),
+  description: z.string().max(2000).optional(),
+  location: z.string().min(2).max(140).optional(),
+  due_date: z.string().nullable().optional(),
+  contractor_id: z.string().min(1).optional(),
+});
+
 export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> }
@@ -22,6 +30,39 @@ export async function GET(
     const user = await requireCurrentUser();
     const { id } = await context.params;
     const project = await assertCanAccessProject(id, user);
+    return Response.json({ project });
+  } catch (err) {
+    return responseError(err);
+  }
+}
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const user = await requireCurrentUser("homeowner");
+    const { id } = await context.params;
+    const existing = await assertCanAccessProject(id, user);
+    if (existing.homeowner_id !== user.id) {
+      throw new HttpError(403, "Only the project homeowner can edit project details.");
+    }
+    const raw = await request.json().catch(() => null);
+    const parsed = EditProjectSchema.safeParse(raw);
+    if (!parsed.success) {
+      return Response.json(
+        { error: parsed.error.issues[0]?.message || "Invalid project update payload" },
+        { status: 400 }
+      );
+    }
+    const repo = getRepo();
+    if (parsed.data.contractor_id) {
+      const contractor = await repo.getProfileById(parsed.data.contractor_id);
+      if (!contractor || contractor.role !== "contractor") {
+        throw new HttpError(400, "Selected contractor profile does not exist.");
+      }
+    }
+    const project = await repo.updateProjectDetails(id, parsed.data);
     return Response.json({ project });
   } catch (err) {
     return responseError(err);

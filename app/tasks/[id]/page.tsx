@@ -243,13 +243,15 @@ export default function TaskInspectionPage() {
       }
       setSelectedReviewVersion(json.review.review_version);
       const srcLabel =
-        json.review.provider === "gemini"
+        json.review.analysis_source === "prepared_demo" || json.review.provider === "demo"
+          ? "Sample inspection · Prepared findings"
+          : json.review.provider === "gemini"
           ? "Gemini AI · Live inspection"
           : json.review.provider === "ollama"
           ? "Local AI · Image inspection"
-          : `${json.review.provider}`;
+          : "Guided Review · Visual assessment by homeowner";
       setBanner({
-        text: `${srcLabel} v${json.review.review_version} completed (${json.review.model}).`,
+        text: `${srcLabel} v${json.review.review_version} recorded (${json.review.model}).`,
         ok: true,
       });
       if (json.fallbackNotice) {
@@ -518,7 +520,7 @@ export default function TaskInspectionPage() {
                       : "border-blue-200 bg-blue-50 text-blue-800"
                   }`}
                 >
-                  {isSimMode ? "Simulation · No money moved" : "PayPal Sandbox"}
+                  {isSimMode ? "Demo environment · Payments simulated" : "PayPal Sandbox"}
                 </span>
               </div>
             </div>
@@ -536,21 +538,29 @@ export default function TaskInspectionPage() {
 
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4 text-xs">
             <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
-              <p className="text-slate-500">{isSimMode ? "Sim Intent ID" : "PayPal Order ID"}</p>
+              <p className="text-slate-500">{isSimMode ? "Demo Order ID" : "PayPal Order ID"}</p>
               <p className="mt-0.5 font-mono-code font-medium text-[#17243A] break-all">
                 {orderRef || "—"}
               </p>
             </div>
             <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
-              <p className="text-slate-500">{isSimMode ? "Sim Auth ID" : "Authorization ID"}</p>
+              <p className="text-slate-500">{isSimMode ? "Demo Auth ID" : "Authorization ID"}</p>
               <p className="mt-0.5 font-mono-code font-medium text-[#17243A] break-all">
                 {authRef || "—"}
               </p>
             </div>
             <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
-              <p className="text-slate-500">{isSimMode ? "Sim Capture ID" : "Capture ID"}</p>
+              <p className="text-slate-500">
+                {task.payment_status === "VOIDED" && isSimMode
+                  ? "Demo Void ID"
+                  : isSimMode
+                  ? "Demo Capture ID"
+                  : "Capture ID"}
+              </p>
               <p className="mt-0.5 font-mono-code font-medium text-[#17243A] break-all">
-                {captureRef || "—"}
+                {(task.payment_status === "VOIDED" && isSimMode
+                  ? task.payment.sim_void_id
+                  : captureRef) || "—"}
               </p>
             </div>
             <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
@@ -593,7 +603,7 @@ export default function TaskInspectionPage() {
             <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-4 space-y-2">
               <p className="text-xs font-semibold text-[#17243A]">
                 Step 1 · Authorize {formatMoney(task.amount_minor_units)} Hold (
-                {isSimMode ? "Simulation" : "PayPal Sandbox"})
+                {isSimMode ? "Demo Simulation" : "PayPal Sandbox"})
               </p>
               <PayPalButtonSlot
                 paymentMode={task.payment.payment_mode || config.payment.mode}
@@ -601,6 +611,7 @@ export default function TaskInspectionPage() {
                 clientId={config.paypal.clientId}
                 configured={config.paypal.configured}
                 taskId={task.id}
+                taskTitle={task.title}
                 amountFormatted={formatMoney(task.amount_minor_units)}
                 onStatusMessage={(text, ok) => setBanner({ text, ok })}
                 onSuccess={load}
@@ -741,11 +752,13 @@ export default function TaskInspectionPage() {
                     Work Evidence &amp; AI Inspection
                   </h2>
                   <p className="text-xs text-slate-500">
-                    {config.ai.activeTier === "gemini_live"
+                    {config.ai.activeTier === "prepared_demo"
+                      ? "Sample inspection · Prepared findings (or Guided Review for custom uploads)"
+                      : config.ai.activeTier === "gemini_live"
                       ? `Gemini AI · Live inspection (${config.ai.model})`
                       : config.ai.activeTier === "ollama_local"
                       ? `Local AI · Image inspection (${config.ai.model})`
-                      : "Guided Review · AI analysis unavailable"}
+                      : "Guided Review — Visual assessment by homeowner"}
                   </p>
                 </div>
                 <Button
@@ -758,8 +771,8 @@ export default function TaskInspectionPage() {
                   {busy === "ai"
                     ? "Running Inspection..."
                     : findings
-                    ? "Re-run AI Inspection"
-                    : "Run AI Inspection"}
+                    ? "Re-run Inspection"
+                    : "Run Inspection"}
                 </Button>
               </div>
 
@@ -784,20 +797,35 @@ export default function TaskInspectionPage() {
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <p className="font-semibold text-amber-950">
-                        Guided Review · AI analysis unavailable
+                        Guided Review — Visual assessment by homeowner
                       </p>
                       <p className="mt-0.5 text-amber-900">{fallbackState.message}</p>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy === "ai"}
-                      onClick={() => runAIReview(true)}
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                      Retry Live AI
-                    </Button>
+                    {config.ai.activeTier !== "prepared_demo" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy === "ai"}
+                        onClick={() => runAIReview(true)}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        Retry Live AI
+                      </Button>
+                    )}
                   </div>
+
+                  {fallbackState.template.questions.length > 0 && (
+                    <div className="rounded-lg border border-amber-200/80 bg-white/80 p-2.5 space-y-1">
+                      <p className="font-semibold text-[#17243A]">
+                        {fallbackState.template.categoryLabel} Visual Prompts:
+                      </p>
+                      <ul className="list-disc pl-4 text-slate-700 space-y-0.5">
+                        {fallbackState.template.questions.map((q) => (
+                          <li key={q.id}>{q.question}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
 
                   <div className="space-y-2 border-t border-amber-200/80 pt-3">
                     <p className="font-semibold text-[#17243A]">
@@ -838,7 +866,7 @@ export default function TaskInspectionPage() {
                         checked={guidedNeedsCloser}
                         onChange={(e) => setGuidedNeedsCloser(e.target.checked)}
                       />
-                      <span>Is a closer photograph needed before deciding?</span>
+                      <span>Is additional evidence required before deciding?</span>
                     </label>
                     <Textarea
                       rows={2}
@@ -890,7 +918,7 @@ export default function TaskInspectionPage() {
                     {config.ai.ollama?.error
                       ? `${config.ai.ollama.error} — `
                       : "No Gemini API key or local Ollama vision model connected — "}
-                    click <strong>Run AI Inspection</strong> after uploading photos to open the
+                    click <strong>Run Inspection</strong> after uploading photos to open the
                     interactive guided checklist, or ask an administrator to configure Gemini in
                     Settings.
                   </p>
@@ -903,18 +931,24 @@ export default function TaskInspectionPage() {
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-[#F7F8FA] px-3 py-2">
                     <span
                       className={`font-semibold ${
-                        activeReview?.provider === "gemini"
+                        activeReview?.analysis_source === "prepared_demo" ||
+                        activeReview?.provider === "demo"
+                          ? "text-[#17243A]"
+                          : activeReview?.provider === "gemini"
                           ? "text-emerald-800"
                           : activeReview?.provider === "ollama"
                           ? "text-blue-800"
                           : "text-amber-900"
                       }`}
                     >
-                      {activeReview?.provider === "gemini"
+                      {activeReview?.analysis_source === "prepared_demo" ||
+                      activeReview?.provider === "demo"
+                        ? "Sample inspection · Prepared findings"
+                        : activeReview?.provider === "gemini"
                         ? "Gemini AI · Live inspection"
                         : activeReview?.provider === "ollama"
                         ? "Local AI · Image inspection"
-                        : "Guided Review · AI analysis unavailable"}
+                        : "Guided Review · Visual assessment by homeowner"}
                     </span>
                     <span className="font-mono-code text-[11px] text-slate-500">
                       {activeReview?.model} · v{activeReview?.review_version} ·{" "}
@@ -1117,7 +1151,7 @@ export default function TaskInspectionPage() {
                 <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 space-y-1">
                   <p className="text-sm font-bold text-emerald-900">
                     Accepted · {formatMoney(task.amount_minor_units)} Captured{" "}
-                    {isSimMode ? "(Simulation · No money moved)" : "via PayPal"}
+                    {isSimMode ? "(Simulation · No funds moved)" : "via PayPal"}
                   </p>
                   <p className="font-mono-code text-xs text-emerald-800">
                     Capture Ref: {captureRef} · Status:{" "}
@@ -1128,12 +1162,14 @@ export default function TaskInspectionPage() {
                 <div className="rounded-xl border border-slate-300 bg-slate-100 p-4 space-y-1">
                   <p className="text-sm font-bold text-[#17243A]">
                     Rejected · {formatMoney(task.amount_minor_units)} Authorization Voided{" "}
-                    {isSimMode ? "(Simulation · No money moved)" : ""}
+                    {isSimMode ? "(Simulation · No funds moved)" : ""}
                   </p>
                   <p className="font-mono-code text-xs text-slate-600">
-                    Auth Ref: {authRef} · Status:{" "}
-                    {task.payment.paypal_status || task.payment.sim_status} (Uncaptured hold
-                    released)
+                    {isSimMode && task.payment.sim_void_id
+                      ? `Void Ref: ${task.payment.sim_void_id} · Auth: ${authRef}`
+                      : `Auth Ref: ${authRef}`}{" "}
+                    · Status: {task.payment.paypal_status || task.payment.sim_status} (Uncaptured
+                    hold released)
                   </p>
                 </div>
               ) : canHomeownerDecide ? (
@@ -1220,7 +1256,7 @@ export default function TaskInspectionPage() {
         title={
           confirmDecision === "accept"
             ? isSimMode
-              ? "Confirm Simulated Capture (No Money Moved)"
+              ? "Confirm Simulated Capture (No Funds Moved)"
               : "Confirm PayPal Payment Capture"
             : confirmDecision === "reject"
             ? isSimMode
@@ -1231,11 +1267,11 @@ export default function TaskInspectionPage() {
         description={
           confirmDecision === "accept"
             ? isSimMode
-              ? `Records simulated capture of ${formatMoney(task.amount_minor_units)} against ${authRef} in SQLite. No real money moves.`
+              ? `Captures ${formatMoney(task.amount_minor_units)} against demo authorization ${authRef} in the local SQLite simulation. No funds move.`
               : `You're about to capture ${formatMoney(task.amount_minor_units)} for ${task.title} using existing PayPal authorization ${authRef}.`
             : confirmDecision === "reject"
             ? isSimMode
-              ? `Voids simulated authorization ${authRef} (${formatMoney(task.amount_minor_units)}) in SQLite. No charge occurred.`
+              ? `Voids the simulated ${formatMoney(task.amount_minor_units)} authorization (${authRef}) in SQLite and records a DEMO-VOID reference. No charge occurred.`
               : `You're about to void the ${formatMoney(task.amount_minor_units)} authorization (${authRef}) for ${task.title}. Voiding cancels the uncaptured hold and does not claim a refund.`
             : "Your feedback will be recorded and visible to the contractor. The authorization stays open."
         }

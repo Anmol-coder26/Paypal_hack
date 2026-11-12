@@ -213,11 +213,13 @@ export default function ContractorWorkspacePage() {
         return;
       }
       const modeLabel =
-        json.review?.provider === "gemini"
+        json.review?.analysis_source === "prepared_demo" || json.review?.provider === "demo"
+          ? "Sample inspection · Prepared findings"
+          : json.review?.provider === "gemini"
           ? "Gemini AI · Live inspection"
           : json.review?.provider === "ollama"
           ? "Local AI · Image inspection"
-          : json.review?.provider;
+          : "Guided Review · Visual assessment by homeowner";
       setBanner({
         text: `${modeLabel} v${json.review.review_version} recorded (${json.review.structured_findings.overall_assessment.replaceAll("_", " ")}).`,
         ok: true,
@@ -477,43 +479,90 @@ export default function ContractorWorkspacePage() {
                   {!["CAPTURED", "VOIDED", "AUTHORIZATION_EXPIRED"].includes(
                     activeEntry.task.payment_status
                   ) && (
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
-                      <span className="font-medium text-slate-700">
-                        Demo Photo Kit (Real 800×600 PNGs → uploads through Sharp pipeline):
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={Boolean(busyAction)}
-                          onClick={() =>
-                            uploadDemoSample(
-                              activeEntry.task.id,
-                              "before",
-                              activeEntry.task.title.toLowerCase().includes("tile")
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 space-y-2.5 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium text-slate-700">
+                          Demo Photo Kit (Real 800×600 PNGs → processed through Sharp pipeline):
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={Boolean(busyAction)}
+                            onClick={() => {
+                              const lower = activeEntry.task.title.toLowerCase();
+                              const path = lower.includes("tile")
                                 ? "/demo-kit/tile-before.png"
-                                : "/demo-kit/painting-before.png"
-                            )
-                          }
-                        >
-                          Load Sample Before
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
+                                : lower.includes("wall") || lower.includes("patch") || lower.includes("drywall")
+                                ? "/demo-kit/wall-before.png"
+                                : "/demo-kit/painting-before.png";
+                              uploadDemoSample(activeEntry.task.id, "before", path);
+                            }}
+                          >
+                            Load Sample Before
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={Boolean(busyAction)}
+                            onClick={() => {
+                              const lower = activeEntry.task.title.toLowerCase();
+                              const path = lower.includes("tile")
+                                ? "/demo-kit/tile-after-issue.png"
+                                : lower.includes("wall") || lower.includes("patch") || lower.includes("drywall")
+                                ? "/demo-kit/wall-after.png"
+                                : "/demo-kit/painting-after.png";
+                              uploadDemoSample(activeEntry.task.id, "after", path);
+                            }}
+                          >
+                            Load Sample After
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-200/80 pt-2 text-[11px] text-slate-600">
+                        <span className="font-medium text-slate-500 mr-1">Alternate variants:</span>
+                        <button
+                          type="button"
                           disabled={Boolean(busyAction)}
                           onClick={() =>
                             uploadDemoSample(
                               activeEntry.task.id,
                               "after",
-                              activeEntry.task.title.toLowerCase().includes("tile")
-                                ? "/demo-kit/tile-after-issue.png"
-                                : "/demo-kit/painting-after.png"
+                              "/demo-kit/painting-after-uneven.png"
                             )
                           }
+                          className="rounded border border-slate-200 bg-white px-2 py-0.5 hover:border-blue-400 cursor-pointer"
                         >
-                          Load Sample After
-                        </Button>
+                          After: Paint Uneven
+                        </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(busyAction)}
+                          onClick={() =>
+                            uploadDemoSample(
+                              activeEntry.task.id,
+                              "after",
+                              "/demo-kit/tile-after-aligned.png"
+                            )
+                          }
+                          className="rounded border border-slate-200 bg-white px-2 py-0.5 hover:border-blue-400 cursor-pointer"
+                        >
+                          After: Tile Aligned
+                        </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(busyAction)}
+                          onClick={() =>
+                            uploadDemoSample(
+                              activeEntry.task.id,
+                              "after",
+                              "/demo-kit/wall-after-issue.png"
+                            )
+                          }
+                          className="rounded border border-slate-200 bg-white px-2 py-0.5 hover:border-blue-400 cursor-pointer"
+                        >
+                          After: Wall Concern
+                        </button>
                       </div>
                     </div>
                   )}
@@ -586,8 +635,8 @@ export default function ContractorWorkspacePage() {
                           {busyAction === "ai"
                             ? "Reviewing submitted photographs..."
                             : activeEntry.task.latest_review
-                            ? "Re-run AI Inspection"
-                            : "Run AI Inspection"}
+                            ? "Re-run Inspection"
+                            : "Run Inspection"}
                         </Button>
                         <Link href={`/tasks/${activeEntry.task.id}`}>
                           <Button size="sm" variant="outline">
@@ -604,11 +653,14 @@ export default function ContractorWorkspacePage() {
                       <div className="flex items-center justify-between gap-2">
                         <span className="inline-flex items-center gap-1.5 font-semibold text-slate-900">
                           <CheckCircle2 className="h-4 w-4 text-blue-600" />
-                          {activeEntry.task.latest_review.provider === "gemini"
+                          {activeEntry.task.latest_review.analysis_source === "prepared_demo" ||
+                          activeEntry.task.latest_review.provider === "demo"
+                            ? "Sample inspection · Prepared findings"
+                            : activeEntry.task.latest_review.provider === "gemini"
                             ? "Gemini AI · Live inspection"
                             : activeEntry.task.latest_review.provider === "ollama"
                             ? "Local AI · Image inspection"
-                            : "Guided Review · AI analysis unavailable"}{" "}
+                            : "Guided Review · Visual assessment by homeowner"}{" "}
                           (v{activeEntry.task.latest_review.review_version})
                         </span>
                         <span className="font-mono-code text-slate-500">

@@ -84,7 +84,7 @@ describe("Offline Simulation Payment Mode Lifecycle & Isolation", () => {
     // 1. Create simulated intents & authorize holds (test timeout + GET reconcile recovery on Paint)
     const intent1 = await createOrderForTask(paint.id, homeowner);
     expect(intent1.mode).toBe("simulation");
-    expect(intent1.orderId).toMatch(/^SIM-INT-/);
+    expect(intent1.orderId).toMatch(/^DEMO-ORD-/);
 
     await expect(
       authorizeOrderForTask(paint.id, homeowner, undefined, { simulateTimeout: true })
@@ -97,10 +97,15 @@ describe("Offline Simulation Payment Mode Lifecycle & Isolation", () => {
     const repeatAuth = await authorizeOrderForTask(paint.id, homeowner);
     expect(repeatAuth.already).toBe(true);
 
+    // Contractor cannot be reassigned once payment authorization has started
+    await expect(
+      repo.updateProjectDetails(project.id, { contractor_id: homeowner.id })
+    ).rejects.toThrow(/Cannot reassign contractor/);
+
     const intent2 = await createOrderForTask(tile.id, homeowner);
-    expect(intent2.orderId).toMatch(/^SIM-INT-/);
+    expect(intent2.orderId).toMatch(/^DEMO-ORD-/);
     const auth2 = await authorizeOrderForTask(tile.id, homeowner);
-    expect(auth2.authorizationId).toMatch(/^SIM-AUTH-/);
+    expect(auth2.authorizationId).toMatch(/^DEMO-AUTH-/);
 
     // 2. Upload before & after images
     const png = await sharp({
@@ -139,13 +144,14 @@ describe("Offline Simulation Payment Mode Lifecycle & Isolation", () => {
       reason: "Clean finish",
     });
     expect(capRes.paymentStatus).toBe("CAPTURED");
-    expect("captureId" in capRes ? capRes.captureId : "").toMatch(/^SIM-CAP-/);
+    expect("captureId" in capRes ? capRes.captureId : "").toMatch(/^DEMO-CAP-/);
 
     const voidRes = await executeHomeownerDecision(tile.id, homeowner, {
       decision: "reject",
       reason: "Visible grout gap",
     });
     expect(voidRes.paymentStatus).toBe("VOIDED");
+    expect("voidId" in voidRes ? voidRes.voidId : "").toMatch(/^DEMO-VOID-/);
 
     // 5. Invalid transitions blocked & zero PayPal IDs fabricated
     await expect(
@@ -163,5 +169,33 @@ describe("Offline Simulation Payment Mode Lifecycle & Isolation", () => {
       expect(t.payment.paypal_authorization_id).toBeNull();
       expect(t.payment.paypal_capture_id).toBeNull();
     }
+    expect(finalProject.tasks[1].payment.sim_void_id).toMatch(/^DEMO-VOID-/);
+
+    // 6. Verify resetGuidedDemo preserves unrelated non-demo projects cleanly
+    const unrelated = await repo.createProject({
+      homeowner_id: homeowner.id,
+      contractor_id: contractor.id,
+      title: "Custom Backyard Patio",
+      description: "Unrelated real project",
+      location: "Austin, TX",
+      due_date: null,
+      is_guided_demo: false,
+      payment_mode: "simulation",
+      tasks: [
+        {
+          title: "Patio Sealant",
+          description: "Reseal patio pavers",
+          acceptance_criteria: ["Joints sealed"],
+          amount_minor_units: 4500,
+        },
+      ],
+    });
+    await repo.updateProjectDetails(unrelated.id, { location: "Austin, TX · Patio" });
+    const resetDemo = await repo.resetGuidedDemo(homeowner.id, contractor.id, "simulation");
+    expect(resetDemo.id).not.toBe(project.id);
+    expect(resetDemo.tasks[0].payment_status).toBe("DRAFT");
+    const survivingUnrelated = await repo.getProjectBundle(unrelated.id);
+    expect(survivingUnrelated?.title).toBe("Custom Backyard Patio");
+    expect(survivingUnrelated?.location).toBe("Austin, TX · Patio");
   });
 });

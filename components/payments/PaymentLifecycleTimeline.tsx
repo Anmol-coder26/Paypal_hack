@@ -60,7 +60,7 @@ export function PaymentLifecycleTimeline({
         status === "CAPTURED"
           ? captureId || "COMPLETED"
           : status === "VOIDED"
-          ? "Hold released (VOIDED)"
+          ? (isSim && payment.sim_void_id) || "Hold released (VOIDED)"
           : step4Pending
           ? "Pending confirmation"
           : "Awaiting homeowner decision",
@@ -122,8 +122,8 @@ export function PaymentLifecycleTimeline({
           <span className="inline-flex items-center gap-1.5">
             <Clock className="h-3.5 w-3.5 text-slate-400" />
             {isSim
-              ? "Simulation · No money moved. Mirrors PayPal's authorization → capture/void rules locally."
-              : "PayPal Sandbox authorizations are temporary holds (up to 29 days, 3-day honor period) — not escrow."}
+              ? "Payment lifecycle simulated locally. No funds moved."
+              : "Test transactions processed through PayPal Sandbox (up to 29-day temporary holds — not escrow)."}
           </span>
           {payment.authorization_expires_at && (
             <span className="font-mono-code text-slate-700">

@@ -40,6 +40,9 @@ export default defineConfig({
       PORT: String(PORT),
       NEXT_PUBLIC_APP_URL: `http://127.0.0.1:${PORT}`,
       PUNCHPAY_DB_PATH: ".data/punchpay-e2e.db",
+      PUNCHPAY_DEMO_MODE: "true",
+      PAYMENT_MODE: "simulation",
+      AI_PROVIDER: "demo",
     },
   },
 });

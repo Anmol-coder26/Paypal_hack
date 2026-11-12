@@ -145,14 +145,19 @@ export default function EvidenceReviewsPage() {
                           {findings.overall_assessment.replaceAll("_", " ")}
                         </span>
                         <span className="ml-auto font-mono-code text-[11px] text-slate-500">
-                          v{task.latest_review?.review_version} · {task.latest_review?.model}
+                          {task.latest_review?.analysis_source === "prepared_demo"
+                            ? "Prepared demo"
+                            : task.latest_review?.analysis_source === "guided_checklist"
+                            ? "Guided review"
+                            : task.latest_review?.provider}{" "}
+                          · v{task.latest_review?.review_version}
                         </span>
                       </div>
                       <p className="text-slate-600 line-clamp-2">{findings.summary}</p>
                     </div>
                   ) : (
                     <p className="text-xs text-slate-500">
-                      {task.evidence.length} evidence file(s) uploaded · AI inspection pending
+                      {task.evidence.length} evidence file(s) uploaded · Inspection pending
                     </p>
                   )}
 

@@ -4,10 +4,17 @@ import { HttpError } from "../errors";
 import { getPayPalClientConfig } from "./paypal-client";
 import type { DecisionAction, PaymentMode, Profile, Project, TaskBundle } from "../types";
 
+export function isDemoModeEnabled(): boolean {
+  return ["true", "1", "yes"].includes(
+    (process.env.PUNCHPAY_DEMO_MODE || "").trim().toLowerCase()
+  );
+}
+
 export function getConfiguredPaymentMode(): PaymentMode {
   const raw = (process.env.PAYMENT_MODE || "").trim().toLowerCase();
   if (raw === "simulation") return "simulation";
   if (raw === "paypal_sandbox") return "paypal_sandbox";
+  if (isDemoModeEnabled()) return "simulation";
   return getPayPalClientConfig().configured ? "paypal_sandbox" : "simulation";
 }
 
@@ -27,7 +34,7 @@ export async function simCreateIntentForTask(task: TaskBundle, project: Project)
       mode: "simulation" as const,
       orderId: payment.sim_intent_id,
       status: payment.payment_status,
-      payeeMerchantId: payment.payee_merchant_id || "SIM-CONTRACTOR-ACCT",
+      payeeMerchantId: payment.payee_merchant_id || "DEMO-MERCHANT-ACCT",
       reused: true,
     };
   }
@@ -35,7 +42,7 @@ export async function simCreateIntentForTask(task: TaskBundle, project: Project)
   if (!["DRAFT", "ORDER_CREATED", "PAYMENT_FAILED"].includes(payment.payment_status)) {
     throw new HttpError(
       409,
-      `Task payment is ${payment.payment_status} and cannot create a new simulated intent.`
+      `Task payment is ${payment.payment_status} and cannot create a new simulated order.`
     );
   }
 
@@ -57,12 +64,12 @@ export async function simCreateIntentForTask(task: TaskBundle, project: Project)
         reused: boolean;
       };
     }
-    throw new HttpError(409, "Simulated intent creation already in progress.");
+    throw new HttpError(409, "Simulated order creation already in progress.");
   }
 
   try {
-    const simIntentId = `SIM-INT-${shortToken()}`;
-    const simMerchant = `SIM-MERCHANT-${project.contractor_id.slice(0, 6).toUpperCase()}`;
+    const simIntentId = `DEMO-ORD-${shortToken()}`;
+    const simMerchant = `DEMO-MERCHANT-${project.contractor_id.slice(0, 6).toUpperCase()}`;
     await repo.claimPaymentState(
       task.id,
       ["DRAFT", "ORDER_CREATED", "PAYMENT_FAILED"],
@@ -84,9 +91,9 @@ export async function simCreateIntentForTask(task: TaskBundle, project: Project)
       payment_record_id: payment.id,
       task_id: task.id,
       actor: "simulation",
-      event_type: "sim_intent_created",
+      event_type: "sim_order_created",
       safe_metadata: {
-        sim_intent_id: simIntentId,
+        demo_order_id: simIntentId,
         amount_minor_units: task.amount_minor_units,
         payment_mode: "simulation",
       },
@@ -167,12 +174,12 @@ export async function simAuthorizeTask(
     throw new HttpError(409, "Simulated authorization is already in flight; run Reconcile.");
   }
 
-  const authId = payment.sim_authorization_id || `SIM-AUTH-${shortToken()}`;
+  const authId = payment.sim_authorization_id || `DEMO-AUTH-${shortToken()}`;
   const createdAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 29 * 86400_000).toISOString();
 
   if (opts.simulateTimeout) {
-    // Persist the underlying simulation hold first, then park in RECONCILIATION_REQUIRED so GET/reconcile proves recovery!
+    // Persist the underlying simulation hold first, then park in RECONCILIATION_REQUIRED so reconcile proves recovery
     await repo.claimPaymentState(
       task.id,
       ["ORDER_CREATED", "BUYER_APPROVAL_PENDING", "PAYMENT_FAILED", "RECONCILIATION_REQUIRED"],
@@ -190,7 +197,7 @@ export async function simAuthorizeTask(
       task_id: task.id,
       actor: "simulation",
       event_type: "sim_authorization_uncertain",
-      safe_metadata: { sim_authorization_id: authId, reason: "simulated_timeout" },
+      safe_metadata: { demo_authorization_id: authId, reason: "simulated_timeout" },
     });
     throw new HttpError(
       504,
@@ -206,7 +213,7 @@ export async function simAuthorizeTask(
       sim_authorization_id: authId,
       sim_status: "CREATED",
       payee_merchant_id:
-        payment.payee_merchant_id || `SIM-MERCHANT-${project.contractor_id.slice(0, 6).toUpperCase()}`,
+        payment.payee_merchant_id || `DEMO-MERCHANT-${project.contractor_id.slice(0, 6).toUpperCase()}`,
       authorization_created_at: createdAt,
       authorization_expires_at: expiresAt,
       last_error: null,
@@ -218,9 +225,9 @@ export async function simAuthorizeTask(
     actor: "simulation",
     event_type: "sim_authorization_created",
     safe_metadata: {
-      sim_authorization_id: authId,
+      demo_authorization_id: authId,
       amount_minor_units: task.amount_minor_units,
-      note: "Simulation · No money moved",
+      note: "Payment lifecycle simulated locally. No funds moved.",
     },
   });
 
@@ -238,6 +245,7 @@ export interface SimSettlementResult {
   workStatus: string;
   paymentStatus: string;
   captureId?: string | null;
+  voidId?: string | null;
   authorizationId?: string | null;
   paypalStatus: string | null;
   already?: boolean;
@@ -270,6 +278,7 @@ export async function simExecuteSettlement(
       workStatus: task.work_status,
       paymentStatus: payment.payment_status,
       authorizationId: payment.sim_authorization_id,
+      voidId: payment.sim_void_id ?? null,
       paypalStatus: payment.sim_status,
       already: true,
     };
@@ -308,13 +317,15 @@ export async function simExecuteSettlement(
   );
 
   if (input.simulateTimeout) {
-    const preCapId = accepted ? `SIM-CAP-${shortToken()}` : null;
+    const preCapId = accepted ? `DEMO-CAP-${shortToken()}` : null;
+    const preVoidId = !accepted ? `DEMO-VOID-${shortToken()}` : null;
     await repo.claimPaymentState(
       task.id,
       [accepted ? "CAPTURE_PENDING" : "VOID_PENDING"],
       "RECONCILIATION_REQUIRED",
       {
         ...(preCapId ? { sim_capture_id: preCapId } : {}),
+        ...(preVoidId ? { sim_void_id: preVoidId } : {}),
         sim_status: accepted ? "COMPLETED" : "VOIDED",
         last_error: "Simulated response lost after settlement; click Reconcile to recover status.",
       }
@@ -324,7 +335,11 @@ export async function simExecuteSettlement(
       task_id: task.id,
       actor: "simulation",
       event_type: accepted ? "sim_capture_uncertain" : "sim_void_uncertain",
-      safe_metadata: { sim_authorization_id: authId, sim_capture_id: preCapId },
+      safe_metadata: {
+        demo_authorization_id: authId,
+        demo_capture_id: preCapId,
+        demo_void_id: preVoidId,
+      },
     });
     throw new HttpError(
       504,
@@ -333,7 +348,7 @@ export async function simExecuteSettlement(
   }
 
   if (accepted) {
-    const captureId = `SIM-CAP-${shortToken()}`;
+    const captureId = `DEMO-CAP-${shortToken()}`;
     await repo.claimPaymentState(task.id, ["CAPTURE_PENDING"], "CAPTURED", {
       sim_capture_id: captureId,
       sim_status: "COMPLETED",
@@ -352,10 +367,10 @@ export async function simExecuteSettlement(
       actor: "simulation",
       event_type: "sim_payment_captured",
       safe_metadata: {
-        sim_capture_id: captureId,
-        sim_authorization_id: authId,
+        demo_capture_id: captureId,
+        demo_authorization_id: authId,
         amount_minor_units: task.amount_minor_units,
-        note: "Simulation · No money moved",
+        note: "Payment lifecycle simulated locally. No funds moved.",
       },
     });
     await onProjectMaybeComplete(project.id);
@@ -370,7 +385,9 @@ export async function simExecuteSettlement(
     return out;
   }
 
+  const voidId = `DEMO-VOID-${shortToken()}`;
   await repo.claimPaymentState(task.id, ["VOID_PENDING"], "VOIDED", {
+    sim_void_id: voidId,
     sim_status: "VOIDED",
     last_error: null,
   });
@@ -387,9 +404,10 @@ export async function simExecuteSettlement(
     actor: "simulation",
     event_type: "sim_authorization_voided",
     safe_metadata: {
-      sim_authorization_id: authId,
+      demo_void_id: voidId,
+      demo_authorization_id: authId,
       amount_minor_units: task.amount_minor_units,
-      note: "Simulation · No money moved",
+      note: "Payment lifecycle simulated locally. No funds moved.",
     },
   });
   await onProjectMaybeComplete(project.id);
@@ -398,6 +416,7 @@ export async function simExecuteSettlement(
     workStatus: "REJECTED",
     paymentStatus: "VOIDED",
     authorizationId: authId,
+    voidId,
     paypalStatus: "SIM_VOIDED",
   };
   await repo.finishIdempotency(opKey, "SUCCEEDED", out);
@@ -413,11 +432,11 @@ export async function simReconcileTask(
   const p = task.payment;
 
   if (!p.sim_intent_id && !p.sim_authorization_id) {
-    throw new HttpError(409, "No simulated intent or authorization exists to reconcile.");
+    throw new HttpError(409, "No simulated order or authorization exists to reconcile.");
   }
 
   if (p.sim_capture_id || p.sim_status === "COMPLETED") {
-    const capId = p.sim_capture_id || `SIM-CAP-${shortToken()}`;
+    const capId = p.sim_capture_id || `DEMO-CAP-${shortToken()}`;
     await repo.claimPaymentState(
       task.id,
       [p.payment_status],
@@ -441,7 +460,7 @@ export async function simReconcileTask(
       task_id: task.id,
       actor: "simulation",
       event_type: "sim_reconciled_capture",
-      safe_metadata: { sim_capture_id: capId },
+      safe_metadata: { demo_capture_id: capId },
     });
     await onProjectMaybeComplete(project.id);
     return {
@@ -449,12 +468,14 @@ export async function simReconcileTask(
       paymentStatus: "CAPTURED",
       paypalStatus: "SIM_COMPLETED",
       captureId: capId,
-      message: `Reconciled simulated capture ${capId} (No money moved).`,
+      message: `Reconciled simulated capture ${capId} (No funds moved).`,
     };
   }
 
-  if (p.sim_status === "VOIDED" || p.payment_status === "VOID_PENDING") {
+  if (p.sim_void_id || p.sim_status === "VOIDED" || p.payment_status === "VOID_PENDING") {
+    const voidId = p.sim_void_id || `DEMO-VOID-${shortToken()}`;
     await repo.claimPaymentState(task.id, [p.payment_status], "VOIDED", {
+      sim_void_id: voidId,
       sim_status: "VOIDED",
       last_error: null,
     });
@@ -467,6 +488,7 @@ export async function simReconcileTask(
         workStatus: "REJECTED",
         paymentStatus: "VOIDED",
         authorizationId: p.sim_authorization_id,
+        voidId,
         paypalStatus: "SIM_VOIDED",
       });
       await repo.finishIdempotency(`sim-capture:${p.sim_authorization_id}`, "FAILED");
@@ -476,7 +498,7 @@ export async function simReconcileTask(
       task_id: task.id,
       actor: "simulation",
       event_type: "sim_reconciled_void",
-      safe_metadata: { sim_authorization_id: p.sim_authorization_id },
+      safe_metadata: { demo_void_id: voidId, demo_authorization_id: p.sim_authorization_id },
     });
     await onProjectMaybeComplete(project.id);
     return {
@@ -484,7 +506,8 @@ export async function simReconcileTask(
       paymentStatus: "VOIDED",
       paypalStatus: "SIM_VOIDED",
       authorizationId: p.sim_authorization_id,
-      message: `Reconciled simulated void on ${p.sim_authorization_id} (No money moved).`,
+      voidId,
+      message: `Reconciled simulated void ${voidId} on ${p.sim_authorization_id} (No funds moved).`,
     };
   }
 

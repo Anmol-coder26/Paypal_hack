@@ -76,6 +76,48 @@ export async function POST(
       });
     }
 
+    if (result.outcome === "prepared_demo_completed") {
+      const review = await repo.saveAIReview({
+        task_id: task.id,
+        model: result.model,
+        provider: result.provider,
+        analysis_source: result.analysisSource,
+        is_genuine_ai: false,
+        analyzed_evidence_ids: result.evidenceIds,
+        image_hashes: result.imageHashes,
+        input_fingerprint: result.inputFingerprint,
+        structured_findings: result.findings,
+        recommendation: result.recommendation,
+      });
+
+      if (["EVIDENCE_SUBMITTED", "AI_REVIEWED", "CORRECTIONS_REQUESTED"].includes(task.work_status)) {
+        await repo.updateTaskWorkStatus(task.id, "AI_REVIEWED");
+      }
+
+      await repo.recordPaymentEvent({
+        payment_record_id: task.payment.id,
+        task_id: task.id,
+        actor: "system",
+        event_type: "sample_inspection_recorded",
+        safe_metadata: {
+          provider: result.provider,
+          model: result.model,
+          analysis_source: result.analysisSource,
+          is_genuine_ai: false,
+          scenario: result.scenarioLabel,
+          version: review.review_version,
+          assessment: result.findings.overall_assessment,
+        },
+      });
+
+      return Response.json({
+        status: "completed",
+        review,
+        scenarioLabel: result.scenarioLabel,
+        qualityWarnings: result.qualityWarnings,
+      });
+    }
+
     const review = await repo.saveAIReview({
       task_id: task.id,
       model: result.model,

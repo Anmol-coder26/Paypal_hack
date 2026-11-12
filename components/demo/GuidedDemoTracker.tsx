@@ -138,23 +138,39 @@ export function GuidedDemoTracker({ project }: { project: ProjectBundle }) {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-6 text-right">
+            <div className="flex flex-wrap items-center gap-5 text-right">
               <div>
-                <p className="text-[11px] text-slate-300">Agreed Value</p>
+                <p className="text-[11px] text-slate-300">Total Agreed</p>
                 <p className="text-base font-bold text-white tabular-nums">
                   {formatMoney(totalMinor)}
                 </p>
               </div>
               <div>
-                <p className="text-[11px] text-slate-300">Captured</p>
+                <p className="text-[11px] text-slate-300">
+                  {hasSimulation && !hasPayPal ? "Demo Captured" : "Captured"}
+                </p>
                 <p className="text-base font-bold text-emerald-300 tabular-nums">
                   {formatMoney(capturedMinor)}
                 </p>
               </div>
               <div>
-                <p className="text-[11px] text-slate-300">Voided</p>
+                <p className="text-[11px] text-slate-300">
+                  {hasSimulation && !hasPayPal ? "Demo Voided" : "Voided"}
+                </p>
                 <p className="text-base font-bold text-slate-200 tabular-nums">
                   {formatMoney(voidedMinor)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] text-slate-300">Outstanding Authorized</p>
+                <p className="text-base font-bold text-blue-300 tabular-nums">
+                  {formatMoney(
+                    tasks
+                      .filter((t) =>
+                        ["AUTHORIZED", "CAPTURE_PENDING", "VOID_PENDING"].includes(t.payment_status)
+                      )
+                      .reduce((s, t) => s + t.amount_minor_units, 0)
+                  )}
                 </p>
               </div>
             </div>
@@ -170,6 +186,7 @@ export function GuidedDemoTracker({ project }: { project: ProjectBundle }) {
                 ? t.payment.sim_authorization_id
                 : t.payment.paypal_authorization_id;
               const capRef = isSim ? t.payment.sim_capture_id : t.payment.paypal_capture_id;
+              const voidRef = isSim ? t.payment.sim_void_id : null;
 
               return (
                 <div
@@ -204,13 +221,18 @@ export function GuidedDemoTracker({ project }: { project: ProjectBundle }) {
                   <div className="space-y-0.5 font-mono-code text-[11px] text-slate-600">
                     <p>
                       Source:{" "}
-                      {isSim ? "Simulation · No money moved" : "PayPal Sandbox API"}
+                      {isSim ? "Simulation · No funds moved" : "PayPal Sandbox API"}
                     </p>
-                    <p>{isSim ? "Sim Intent" : "PayPal Order"}: {orderRef || "—"}</p>
-                    <p>{isSim ? "Sim Auth" : "PayPal Auth"}: {authRef || "—"}</p>
+                    <p>{isSim ? "Demo Order" : "PayPal Order"}: {orderRef || "—"}</p>
+                    <p>{isSim ? "Demo Auth" : "PayPal Auth"}: {authRef || "—"}</p>
                     {capRef && (
                       <p className="text-emerald-800 font-semibold">
-                        {isSim ? "Sim Capture" : "PayPal Capture"}: {capRef}
+                        {isSim ? "Demo Capture" : "PayPal Capture"}: {capRef}
+                      </p>
+                    )}
+                    {voidRef && (
+                      <p className="text-slate-800 font-semibold">
+                        Demo Void: {voidRef}
                       </p>
                     )}
                     <p>Payee: {t.payment.payee_merchant_id || "—"}</p>
@@ -223,7 +245,7 @@ export function GuidedDemoTracker({ project }: { project: ProjectBundle }) {
           <div className="px-5 py-3 border-t border-slate-200 bg-slate-50/70 flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs text-slate-600">
               {hasSimulation && !hasPayPal
-                ? "Simulated transaction IDs (SIM-*) are recorded in SQLite locally and explicitly separated from PayPal records."
+                ? "Simulated transaction IDs (DEMO-*) are persisted in SQLite locally and strictly separated from PayPal records."
                 : "Derived directly from persisted database records."}
             </p>
             <Link

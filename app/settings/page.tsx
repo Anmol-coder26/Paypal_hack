@@ -287,9 +287,11 @@ export default function SettingsPage() {
 
           <Card className="p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-700">Active AI Tier</span>
+              <span className="text-xs font-semibold text-slate-700">Active AI Mode</span>
               {config.ai.activeTier === "gemini_live" ? (
                 <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+              ) : config.ai.activeTier === "prepared_demo" ? (
+                <Cpu className="h-4 w-4 text-[#2563EB]" />
               ) : config.ai.configured ? (
                 <CheckCircle2 className="h-4 w-4 text-blue-600" />
               ) : (
@@ -297,18 +299,22 @@ export default function SettingsPage() {
               )}
             </div>
             <p className="text-sm font-bold text-[#17243A]">
-              {config.ai.activeTier === "gemini_live"
+              {config.ai.activeTier === "prepared_demo"
+                ? "Prepared Demo + Guided"
+                : config.ai.activeTier === "gemini_live"
                 ? `Gemini (${config.ai.model})`
                 : config.ai.configured
                 ? `${config.ai.provider} (${config.ai.model})`
                 : "Guided Review"}
             </p>
             <p className="text-xs text-slate-500">
-              {config.ai.activeTier === "gemini_live"
-                ? "Level 1 · Live Multimodal Vision"
+              {config.ai.activeTier === "prepared_demo"
+                ? "Mode C · Sample inspection + Checklist (0 API calls)"
+                : config.ai.activeTier === "gemini_live"
+                ? "Mode A · Live Multimodal Vision"
                 : config.ai.activeTier === "ollama_local"
-                ? "Level 2 · Local Ollama Fallback"
-                : "Level 3 · Manual / Guided Checklist"}
+                ? "Mode B · Local Ollama Fallback"
+                : "Manual / Guided Checklist"}
             </p>
           </Card>
 
@@ -334,14 +340,19 @@ export default function SettingsPage() {
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <KeyRound className="h-4 w-4 text-[#2563EB]" />
-                <h2 className="text-base font-semibold text-[#17243A]">AI Configuration</h2>
+                <h2 className="text-base font-semibold text-[#17243A]">AI &amp; Demo Inspection Status</h2>
               </div>
               <p className="text-xs text-slate-500">
-                Server-encrypted Gemini API credentials with automatic fallback: Gemini → Local AI
-                (Ollama) → Guided Checklist.
+                Supports Mode A (Gemini Live), Mode B (Local Ollama), and Mode C (Prepared Demo +
+                Guided Review).
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
+              {config.ai.activeTier === "prepared_demo" && (
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 font-semibold text-blue-800">
+                  Demo Mode Active (AI_PROVIDER=demo)
+                </span>
+              )}
               <span
                 className={`rounded-full border px-2.5 py-1 font-semibold ${
                   g?.configured
@@ -353,7 +364,7 @@ export default function SettingsPage() {
                   ? g.source === "admin_vault"
                     ? "Gemini Configured (Encrypted Vault)"
                     : "Gemini Configured (Environment)"
-                  : "Gemini Not Configured"}
+                  : "Gemini Key Not Configured"}
               </span>
               {g?.cooldownActive && (
                 <span className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-800">
@@ -363,7 +374,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* 3-Tier Fallback Summary */}
+          {/* 3-Mode Readiness Grid */}
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 text-xs">
             <div
               className={`rounded-xl border p-3 ${
@@ -372,11 +383,13 @@ export default function SettingsPage() {
                   : "border-slate-200 bg-[#F7F8FA]"
               }`}
             >
-              <p className="font-semibold text-[#17243A]">1. Gemini Live Vision</p>
+              <p className="font-semibold text-[#17243A]">Mode A · Gemini Live Vision</p>
               <p className="mt-0.5 text-slate-600">
-                {g?.configured
-                  ? `Ready (${g.model})`
-                  : "Requires admin-saved or .env.local key"}
+                {config.ai.activeTier === "prepared_demo"
+                  ? "Standby (paused while AI_PROVIDER=demo)"
+                  : g?.configured
+                  ? `Active (${g.model})`
+                  : "Unavailable (no API key configured)"}
               </p>
             </div>
             <div
@@ -386,23 +399,27 @@ export default function SettingsPage() {
                   : "border-slate-200 bg-[#F7F8FA]"
               }`}
             >
-              <p className="font-semibold text-[#17243A]">2. Local AI (Ollama)</p>
+              <p className="font-semibold text-[#17243A]">Mode B · Local AI (Ollama)</p>
               <p className="mt-0.5 text-slate-600">
                 {ollama?.reachable && ollama?.modelAvailable
-                  ? `Ready (${ollama.model})`
-                  : ollama?.error || "Not reachable locally"}
+                  ? config.ai.activeTier === "prepared_demo"
+                    ? `Standby (${ollama.model})`
+                    : `Active (${ollama.model})`
+                  : ollama?.error || "Unavailable (not reachable locally)"}
               </p>
             </div>
             <div
               className={`rounded-xl border p-3 ${
-                config.ai.activeTier === "guided_fallback"
-                  ? "border-amber-200 bg-amber-50/60"
+                config.ai.activeTier === "prepared_demo" || config.ai.activeTier === "guided_fallback"
+                  ? "border-blue-200 bg-blue-50/70"
                   : "border-slate-200 bg-[#F7F8FA]"
               }`}
             >
-              <p className="font-semibold text-[#17243A]">3. Guided Review</p>
+              <p className="font-semibold text-[#17243A]">Mode C · Prepared Demo &amp; Guided</p>
               <p className="mt-0.5 text-slate-600">
-                Always available · Honest user-reported checklist
+                {config.ai.activeTier === "prepared_demo"
+                  ? "Active · 6 prepared sample cases + Guided checklist"
+                  : "Always available · Honest homeowner checklist"}
               </p>
             </div>
           </div>
@@ -615,14 +632,16 @@ export default function SettingsPage() {
             Optional Server Environment Reference (<code>.env.local</code>)
           </h2>
           <pre className="overflow-x-auto rounded-xl bg-[#17243A] p-4 font-mono-code text-xs text-slate-100 leading-relaxed">
-{`# Payment Mode: 'simulation' (no money moved) or 'paypal_sandbox'
+{`# Interactive Demo Environment (no external PayPal or Gemini credentials required)
+PUNCHPAY_DEMO_MODE=true
 PAYMENT_MODE=simulation
+AI_PROVIDER=demo
 
-# Optional Gemini Environment Alternative (never overwritten by Settings UI)
-GEMINI_API_KEY=your_gemini_api_key
+# Optional Live Providers (for future Sandbox / Vision activation)
+# PAYPAL_CLIENT_ID=...
+# PAYPAL_CLIENT_SECRET=...
+# PAYPAL_MERCHANT_ID=...
 GEMINI_MODEL=gemini-3.5-flash
-
-# Optional Local Ollama Vision Fallback
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen2.5vl:3b
 

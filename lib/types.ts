@@ -98,9 +98,10 @@ export interface AICriterionCheck {
   observation: string;
 }
 
-export type AIProviderType = "ollama" | "gemini" | "anthropic" | "guided";
+export type AIProviderType = "demo" | "ollama" | "gemini" | "anthropic" | "guided";
 
 export type AIAnalysisSource =
+  | "prepared_demo"
   | "gemini_live"
   | "ollama_local"
   | "anthropic_live"
@@ -174,6 +175,7 @@ export interface PaymentRecord {
   sim_intent_id: string | null;
   sim_authorization_id: string | null;
   sim_capture_id: string | null;
+  sim_void_id?: string | null;
   sim_status: string | null;
   payee_merchant_id: string | null;
   amount_minor_units: number;
@@ -240,6 +242,7 @@ export interface ProjectBundle extends Project {
 }
 
 export interface SystemConfigStatus {
+  demoMode?: boolean;
   payment: {
     mode: PaymentMode;
     label: string;
@@ -258,6 +261,7 @@ export interface SystemConfigStatus {
     activeTier?: AIAnalysisSource | "guided_fallback";
     gemini?: GeminiConfigMetadata;
     ollama?: {
+      explicitlySelected?: boolean;
       configured: boolean;
       reachable: boolean;
       modelAvailable: boolean;

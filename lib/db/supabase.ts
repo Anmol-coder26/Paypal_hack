@@ -22,13 +22,15 @@ import type {
   UserRole,
   WorkStatus,
 } from "../types";
-import type {
-  CreateProjectInput,
-  IdempotencyRow,
-  ProfileWithSecret,
-  PunchPayRepository,
-  SaveEvidenceInput,
-  UpdateTaskInput,
+import {
+  buildGuidedDemoProjectInput,
+  type CreateProjectInput,
+  type IdempotencyRow,
+  type ProfileWithSecret,
+  type PunchPayRepository,
+  type SaveEvidenceInput,
+  type UpdateProjectInput,
+  type UpdateTaskInput,
 } from "./repository";
 import { DEMO_ACCOUNTS, hashPassword } from "./sqlite";
 
@@ -284,6 +286,53 @@ export class SupabaseRepository implements PunchPayRepository {
     const bundle = await this.getProjectBundle(project.id);
     if (!bundle) throw new HttpError(500, "Failed to load created project");
     return bundle;
+  }
+
+  async updateProjectDetails(projectId: string, input: UpdateProjectInput): Promise<ProjectBundle> {
+    const existing = await this.getProjectBundle(projectId);
+    if (!existing) throw new HttpError(404, "Project not found");
+    if (
+      input.contractor_id &&
+      input.contractor_id !== existing.contractor_id &&
+      existing.tasks.some((t) => t.payment_status !== "DRAFT")
+    ) {
+      throw new HttpError(
+        409,
+        "Cannot reassign contractor after payment authorization has started."
+      );
+    }
+    await this.client
+      .from("projects")
+      .update({
+        title: input.title?.trim() ?? existing.title,
+        description: input.description?.trim() ?? existing.description,
+        location: input.location?.trim() ?? existing.location,
+        due_date: input.due_date !== undefined ? input.due_date : existing.due_date,
+        contractor_id: input.contractor_id ?? existing.contractor_id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", projectId);
+    const updated = await this.getProjectBundle(projectId);
+    if (!updated) throw new HttpError(404, "Project not found");
+    return updated;
+  }
+
+  async resetGuidedDemo(
+    homeownerId: string,
+    contractorId: string,
+    paymentMode: PaymentMode
+  ): Promise<ProjectBundle> {
+    const { data: demoProjects } = await this.client
+      .from("projects")
+      .select("id")
+      .eq("homeowner_id", homeownerId)
+      .eq("is_guided_demo", true);
+    for (const dp of demoProjects ?? []) {
+      await this.client.from("projects").delete().eq("id", dp.id);
+    }
+    return this.createProject(
+      buildGuidedDemoProjectInput({ homeownerId, contractorId, paymentMode })
+    );
   }
 
   async updateProjectStatus(projectId: string, status: Project["status"]): Promise<void> {
@@ -621,6 +670,7 @@ export class SupabaseRepository implements PunchPayRepository {
         | "sim_intent_id"
         | "sim_authorization_id"
         | "sim_capture_id"
+        | "sim_void_id"
         | "sim_status"
         | "payee_merchant_id"
         | "order_attempt"

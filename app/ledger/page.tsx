@@ -294,6 +294,7 @@ export default function SettlementLedgerPage() {
                     const isSim = entry.payment.payment_mode === "simulation";
                     const ref = isSim
                       ? entry.payment.sim_capture_id ||
+                        entry.payment.sim_void_id ||
                         entry.payment.sim_authorization_id ||
                         entry.payment.sim_intent_id ||
                         "Not initialized"
@@ -362,6 +363,7 @@ export default function SettlementLedgerPage() {
           const capRef = isSim
             ? selected.payment.sim_capture_id
             : selected.payment.paypal_capture_id;
+          const voidRef = isSim ? selected.payment.sim_void_id : null;
           const provStatus = isSim
             ? selected.payment.sim_status
             : selected.payment.paypal_status;
@@ -381,12 +383,13 @@ export default function SettlementLedgerPage() {
                 <p>
                   Source:{" "}
                   {isSim
-                    ? "Simulation · No money moved"
+                    ? "Simulation · Payment lifecycle simulated locally. No funds moved."
                     : "PayPal Sandbox API"}
                 </p>
-                <p>{isSim ? "Sim Intent ID" : "Order ID"}: {orderRef || "—"}</p>
-                <p>{isSim ? "Sim Auth ID" : "Auth ID"}: {authRef || "—"}</p>
-                <p>{isSim ? "Sim Capture ID" : "Capture ID"}: {capRef || "—"}</p>
+                <p>{isSim ? "Demo Order ID" : "Order ID"}: {orderRef || "—"}</p>
+                <p>{isSim ? "Demo Auth ID" : "Auth ID"}: {authRef || "—"}</p>
+                <p>{isSim ? "Demo Capture ID" : "Capture ID"}: {capRef || "—"}</p>
+                {voidRef && <p>Demo Void ID: {voidRef}</p>}
                 <p>Payee Merchant: {selected.payment.payee_merchant_id || "—"}</p>
                 <p>Provider Status: {provStatus || "—"}</p>
                 <p>Auth Expires: {formatDateTime(selected.payment.authorization_expires_at)}</p>

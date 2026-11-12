@@ -24,13 +24,15 @@ import type {
   UserRole,
   WorkStatus,
 } from "../types";
-import type {
-  CreateProjectInput,
-  IdempotencyRow,
-  ProfileWithSecret,
-  PunchPayRepository,
-  SaveEvidenceInput,
-  UpdateTaskInput,
+import {
+  buildGuidedDemoProjectInput,
+  type CreateProjectInput,
+  type IdempotencyRow,
+  type ProfileWithSecret,
+  type PunchPayRepository,
+  type SaveEvidenceInput,
+  type UpdateProjectInput,
+  type UpdateTaskInput,
 } from "./repository";
 
 export const DEMO_ACCOUNTS = {
@@ -197,6 +199,7 @@ export class SqliteRepository implements PunchPayRepository {
         sim_intent_id TEXT UNIQUE,
         sim_authorization_id TEXT UNIQUE,
         sim_capture_id TEXT UNIQUE,
+        sim_void_id TEXT UNIQUE,
         sim_status TEXT,
         payee_merchant_id TEXT,
         amount_minor_units INTEGER NOT NULL,
@@ -319,6 +322,10 @@ export class SqliteRepository implements PunchPayRepository {
     if (!existing.has("sim_capture_id")) {
       this.db.exec("ALTER TABLE payment_records ADD COLUMN sim_capture_id TEXT");
       this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS payment_records_sim_cap_idx ON payment_records (sim_capture_id)");
+    }
+    if (!existing.has("sim_void_id")) {
+      this.db.exec("ALTER TABLE payment_records ADD COLUMN sim_void_id TEXT");
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS payment_records_sim_void_idx ON payment_records (sim_void_id)");
     }
     if (!existing.has("sim_status")) {
       this.db.exec("ALTER TABLE payment_records ADD COLUMN sim_status TEXT");
@@ -484,7 +491,9 @@ export class SqliteRepository implements PunchPayRepository {
     const reviews: AIReviewRecord[] = rawReviews.map((r) => {
       const parsedFindings = JSON.parse(String(r.structured_findings));
       const fallbackSource: AIAnalysisSource =
-        r.provider === "ollama"
+        r.provider === "demo"
+          ? "prepared_demo"
+          : r.provider === "ollama"
           ? "ollama_local"
           : r.provider === "anthropic"
           ? "anthropic_live"
@@ -500,7 +509,9 @@ export class SqliteRepository implements PunchPayRepository {
           ? String(r.analysis_source)
           : fallbackSource) as AIAnalysisSource,
         is_genuine_ai:
-          r.is_genuine_ai !== undefined ? Boolean(r.is_genuine_ai) : r.provider !== "guided",
+          r.is_genuine_ai !== undefined
+            ? Boolean(r.is_genuine_ai)
+            : r.provider !== "guided" && r.provider !== "demo",
         analyzed_evidence_ids: JSON.parse(String(r.analyzed_evidence_ids || "[]")),
         image_hashes: JSON.parse(String(r.image_hashes || "[]")),
         input_fingerprint: r.input_fingerprint ? String(r.input_fingerprint) : null,
@@ -686,6 +697,71 @@ export class SqliteRepository implements PunchPayRepository {
     const bundle = await this.getProjectBundle(projectId);
     if (!bundle) throw new HttpError(500, "Failed to load newly created project");
     return bundle;
+  }
+
+  async updateProjectDetails(projectId: string, input: UpdateProjectInput): Promise<ProjectBundle> {
+    const existing = await this.getProjectBundle(projectId);
+    if (!existing) throw new HttpError(404, "Project not found");
+    if (
+      input.contractor_id &&
+      input.contractor_id !== existing.contractor_id &&
+      existing.tasks.some((t) => t.payment_status !== "DRAFT")
+    ) {
+      throw new HttpError(
+        409,
+        "Cannot reassign contractor after payment authorization has started."
+      );
+    }
+    this.db
+      .prepare(
+        `UPDATE projects
+         SET title = ?, description = ?, location = ?, due_date = ?, contractor_id = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .run(
+        input.title?.trim() ?? existing.title,
+        input.description?.trim() ?? existing.description,
+        input.location?.trim() ?? existing.location,
+        input.due_date !== undefined ? input.due_date : existing.due_date,
+        input.contractor_id ?? existing.contractor_id,
+        nowIso(),
+        projectId
+      );
+    const updated = await this.getProjectBundle(projectId);
+    if (!updated) throw new HttpError(404, "Project not found");
+    return updated;
+  }
+
+  async resetGuidedDemo(
+    homeownerId: string,
+    contractorId: string,
+    paymentMode: PaymentMode
+  ): Promise<ProjectBundle> {
+    await this.ensureSeedProfiles();
+    const demoRows = this.db
+      .prepare("SELECT id FROM projects WHERE homeowner_id = ? AND is_guided_demo = 1")
+      .all(homeownerId) as Array<{ id: string }>;
+
+    for (const proj of demoRows) {
+      const evRows = this.db
+        .prepare(
+          `SELECT e.image_storage_path FROM evidence e
+           JOIN repair_tasks t ON t.id = e.task_id
+           WHERE t.project_id = ?`
+        )
+        .all(proj.id) as Array<{ image_storage_path: string }>;
+      for (const ev of evRows) {
+        const fullPath = path.join(this.evidenceDir, path.basename(ev.image_storage_path));
+        if (fs.existsSync(fullPath)) {
+          fs.unlinkSync(fullPath);
+        }
+      }
+      this.db.prepare("DELETE FROM projects WHERE id = ?").run(proj.id);
+    }
+
+    return this.createProject(
+      buildGuidedDemoProjectInput({ homeownerId, contractorId, paymentMode })
+    );
   }
 
   async updateProjectStatus(projectId: string, status: Project["status"]): Promise<void> {
@@ -1090,6 +1166,7 @@ export class SqliteRepository implements PunchPayRepository {
         | "sim_intent_id"
         | "sim_authorization_id"
         | "sim_capture_id"
+        | "sim_void_id"
         | "sim_status"
         | "payee_merchant_id"
         | "order_attempt"
@@ -1151,6 +1228,13 @@ export class SqliteRepository implements PunchPayRepository {
       ) {
         throw new HttpError(409, "Simulated capture ID is immutable once recorded");
       }
+      if (
+        current.sim_void_id &&
+        patch.sim_void_id !== undefined &&
+        patch.sim_void_id !== current.sim_void_id
+      ) {
+        throw new HttpError(409, "Simulated void ID is immutable once recorded");
+      }
 
       const merged = {
         payment_mode: patch.payment_mode !== undefined ? patch.payment_mode : current.payment_mode,
@@ -1176,6 +1260,8 @@ export class SqliteRepository implements PunchPayRepository {
             : current.sim_authorization_id,
         sim_capture_id:
           patch.sim_capture_id !== undefined ? patch.sim_capture_id : current.sim_capture_id,
+        sim_void_id:
+          patch.sim_void_id !== undefined ? patch.sim_void_id : (current.sim_void_id ?? null),
         sim_status: patch.sim_status !== undefined ? patch.sim_status : current.sim_status,
         payee_merchant_id:
           patch.payee_merchant_id !== undefined
@@ -1206,6 +1292,7 @@ export class SqliteRepository implements PunchPayRepository {
              sim_intent_id = ?,
              sim_authorization_id = ?,
              sim_capture_id = ?,
+             sim_void_id = ?,
              sim_status = ?,
              payee_merchant_id = ?,
              order_attempt = ?,
@@ -1225,6 +1312,7 @@ export class SqliteRepository implements PunchPayRepository {
           merged.sim_intent_id,
           merged.sim_authorization_id,
           merged.sim_capture_id,
+          merged.sim_void_id,
           merged.sim_status,
           merged.payee_merchant_id,
           merged.order_attempt,

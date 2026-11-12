@@ -8,7 +8,7 @@ import { getRepo, isSupabaseConfigured } from "../db";
 import { DEMO_ACCOUNTS, hashPassword, verifyPassword } from "../db/sqlite";
 import { HttpError } from "../errors";
 import { getPayPalClientConfig } from "../payments/paypal-client";
-import { getConfiguredPaymentMode } from "../payments/simulator";
+import { getConfiguredPaymentMode, isDemoModeEnabled } from "../payments/simulator";
 import type { AIAnalysisSource, AIProviderType, Profile, SystemConfigStatus, UserRole } from "../types";
 
 export const SESSION_COOKIE_NAME = "punchpay_session";
@@ -161,14 +161,19 @@ export async function registerUserAccount(input: {
 export function getSystemConfigStatus(): SystemConfigStatus {
   const paypal = getPayPalClientConfig();
   const mode = getConfiguredPaymentMode();
+  const demoMode = isDemoModeEnabled();
   const preferred = (process.env.AI_PROVIDER || "").trim().toLowerCase();
+  const demoAIActive = preferred === "demo" || (demoMode && !preferred);
   const geminiKey = process.env.GEMINI_API_KEY || "";
   const anthropicKey = process.env.ANTHROPIC_API_KEY || "";
   const ollamaCfg = getOllamaConfig();
 
   let aiProvider: AIProviderType | null = null;
   let aiModel: string | null = null;
-  if (preferred === "ollama") {
+  if (demoAIActive) {
+    aiProvider = "demo";
+    aiModel = "prepared-demo-v1";
+  } else if (preferred === "ollama") {
     aiProvider = "ollama";
     aiModel = ollamaCfg.model;
   } else if (preferred === "gemini" && geminiKey) {
@@ -189,11 +194,14 @@ export function getSystemConfigStatus(): SystemConfigStatus {
   }
 
   return {
+    demoMode,
     payment: {
       mode,
       label:
         mode === "simulation"
-          ? "Simulation · No money moved"
+          ? demoMode
+            ? "Demo environment · Payments simulated"
+            : "Simulation · No money moved"
           : "PayPal Sandbox · Test transactions",
     },
     paypal: {
@@ -204,9 +212,11 @@ export function getSystemConfigStatus(): SystemConfigStatus {
       webhookConfigured: Boolean(paypal.webhookId),
     },
     ai: {
-      configured: Boolean(aiProvider && (aiProvider !== "ollama" || ollamaCfg.explicitlySelected)),
+      configured:
+        Boolean(aiProvider && (aiProvider !== "ollama" || ollamaCfg.explicitlySelected)),
       provider: aiProvider,
       model: aiModel,
+      ...(demoAIActive ? { activeTier: "prepared_demo" as const } : {}),
     },
     database: {
       driver: isSupabaseConfigured() ? "supabase" : "sqlite",
@@ -221,13 +231,21 @@ export async function getLiveSystemConfigStatus(): Promise<SystemConfigStatus> {
     getGeminiPublicMetadata(),
     probeOllamaHealth(),
   ]);
+  const demoMode = isDemoModeEnabled();
+  const aiProviderEnv = (process.env.AI_PROVIDER || "").trim().toLowerCase();
+  const demoAIActive = aiProviderEnv === "demo" || (demoMode && !aiProviderEnv);
 
   let configured = false;
   let provider: AIProviderType | null = null;
   let model: string | null = null;
   let activeTier: AIAnalysisSource | "guided_fallback" = "guided_fallback";
 
-  if (geminiMeta.configured && !geminiMeta.cooldownActive) {
+  if (demoAIActive) {
+    configured = true;
+    provider = "demo";
+    model = "prepared-demo-v1";
+    activeTier = "prepared_demo";
+  } else if (geminiMeta.configured && !geminiMeta.cooldownActive) {
     configured = true;
     provider = "gemini";
     model = geminiMeta.model;
@@ -252,6 +270,16 @@ export async function getLiveSystemConfigStatus(): Promise<SystemConfigStatus> {
 
   return {
     ...base,
+    demoMode,
+    payment: {
+      ...base.payment,
+      label:
+        base.payment.mode === "simulation"
+          ? demoMode
+            ? "Demo environment · Payments simulated"
+            : "Simulation · No money moved"
+          : "PayPal Sandbox · Test transactions",
+    },
     ai: {
       configured,
       provider,

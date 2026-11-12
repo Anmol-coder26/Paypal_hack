@@ -335,6 +335,8 @@ export function AppShell({
                   "hidden md:inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
                   config.ai.activeTier === "gemini_live"
                     ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : config.ai.activeTier === "prepared_demo"
+                    ? "border-slate-300 bg-[#F7F8FA] text-[#17243A] hover:bg-slate-100"
                     : config.ai.configured
                     ? "border-blue-200 bg-blue-50 text-blue-800"
                     : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
@@ -344,6 +346,11 @@ export function AppShell({
                   <>
                     <CheckCircle2 className="h-3 w-3" />
                     <span>Gemini AI · {config.ai.model}</span>
+                  </>
+                ) : config.ai.activeTier === "prepared_demo" ? (
+                  <>
+                    <Cpu className="h-3 w-3 text-[#2563EB]" />
+                    <span>Sample inspection · Prepared + Guided</span>
                   </>
                 ) : config.ai.configured ? (
                   <>

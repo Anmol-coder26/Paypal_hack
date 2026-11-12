@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getLiveSystemConfigStatus, requireCurrentUser } from "@/lib/auth/session";
 import { getRepo } from "@/lib/db";
+import { buildGuidedDemoProjectInput } from "@/lib/db/repository";
 import { getConfiguredPaymentMode } from "@/lib/payments/simulator";
 import { DEMO_ACCOUNTS } from "@/lib/db/sqlite";
 import { HttpError } from "@/lib/errors";
@@ -74,42 +75,13 @@ export async function POST(request: Request) {
       if (!contractor || contractor.role !== "contractor") {
         throw new HttpError(400, "Assigned contractor profile not found");
       }
-      const project = await repo.createProject({
-        homeowner_id: user.id,
-        contractor_id: contractor.id,
-        title: "Kitchen Renovation Closeout",
-        description:
-          "Guided closeout project: two independent repairs with separate authorization holds, photo evidence inspection, and homeowner-controlled capture or void.",
-        location: "Austin, TX",
-        due_date: new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10),
-        is_guided_demo: true,
-        payment_mode: activeMode,
-        tasks: [
-          {
-            title: "Painting",
-            description:
-              "Repair and repaint the scuffed drywall beside the north window to blend smoothly with the adjacent wall.",
-            acceptance_criteria: [
-              "Coverage looks uniform",
-              "No obvious unpainted patches",
-              "Edges appear clean in supplied photographs",
-            ],
-            amount_minor_units: 3000,
-          },
-          {
-            title: "Tile Repair",
-            description:
-              "Replace the cracked kitchen backsplash tile near the sink and finish surrounding grout lines.",
-            acceptance_criteria: [
-              "Damaged tile replaced",
-              "Alignment consistent",
-              "No obvious visible gaps",
-              "Finishing appears complete",
-            ],
-            amount_minor_units: 2000,
-          },
-        ],
-      });
+      const project = await repo.createProject(
+        buildGuidedDemoProjectInput({
+          homeownerId: user.id,
+          contractorId: contractor.id,
+          paymentMode: activeMode,
+        })
+      );
       return Response.json({ project }, { status: 201 });
     }
 

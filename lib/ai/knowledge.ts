@@ -43,17 +43,22 @@ export const REPAIR_KNOWLEDGE_BASE: RepairKnowledgeCategory[] = [
     guided_questions: [
       {
         id: "paint_uniform",
-        question: "Is the paint coverage visually uniform across the repaired wall area?",
+        question: "Is the coverage visually uniform?",
         concernSummary: "User reported uneven paint coverage or sheen patches.",
       },
       {
         id: "paint_unpainted",
-        question: "Are there no visible unpainted patches, scuff bleed-through, or missed trim edges?",
-        concernSummary: "User reported visible unpainted patches or bleed-through.",
+        question: "Are unfinished patches visible?",
+        concernSummary: "User reported visible unfinished patches or bleed-through.",
       },
       {
-        id: "paint_framing",
-        question: "Are the Before and After photos clear enough to compare the same wall section?",
+        id: "paint_edges",
+        question: "Are edges clean?",
+        concernSummary: "User reported rough or uneven paint edges near trim or casings.",
+      },
+      {
+        id: "paint_more_evidence",
+        question: "Is additional evidence required?",
         concernSummary: "User reported a closer or clearer photograph is needed for paint comparison.",
       },
     ],
@@ -92,19 +97,24 @@ export const REPAIR_KNOWLEDGE_BASE: RepairKnowledgeCategory[] = [
     ],
     guided_questions: [
       {
-        id: "tile_replaced",
-        question: "Was the cracked or damaged tile clearly replaced in the After photograph?",
-        concernSummary: "User reported the damaged tile replacement could not be confirmed.",
-      },
-      {
         id: "tile_aligned",
-        question: "Does the replacement tile appear aligned with adjacent tiles?",
+        question: "Is alignment satisfactory?",
         concernSummary: "User reported visible tile alignment offset relative to neighboring tiles.",
       },
       {
         id: "tile_gaps",
-        question: "Are surrounding grout lines filled with no obvious gaps or unfinished edges?",
-        concernSummary: "User reported visible gaps or unfinished grout around the replacement tile.",
+        question: "Are visible gaps present?",
+        concernSummary: "User reported visible gaps along the replacement tile edges.",
+      },
+      {
+        id: "tile_grout",
+        question: "Does the grouting appear complete?",
+        concernSummary: "User reported unfinished or missing grout around the replacement tile.",
+      },
+      {
+        id: "tile_more_evidence",
+        question: "Is additional evidence required?",
+        concernSummary: "User reported a closer angled photograph is needed to inspect the tile seams.",
       },
     ],
     common_visible_concerns: [

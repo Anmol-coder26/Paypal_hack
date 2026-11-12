@@ -148,7 +148,7 @@ export default function PaymentControlPage() {
                               : "border-blue-200 bg-blue-50 text-blue-800"
                           }`}
                         >
-                          {isSim ? "Simulation · No money moved" : "PayPal Sandbox"}
+                          {isSim ? "Demo environment · Payments simulated" : "PayPal Sandbox"}
                         </span>
                         {providerStatus && (
                           <span className="rounded bg-slate-100 px-2 py-0.5 font-mono-code text-[11px] text-slate-700">
@@ -163,7 +163,7 @@ export default function PaymentControlPage() {
                         {formatMoney(p.amount_minor_units, p.currency)}
                       </p>
                       <p className="text-xs text-slate-500">
-                        {p.currency} · {isSim ? "Local Simulation" : "PayPal Sandbox"}
+                        {p.currency} · {isSim ? "Local Simulation (No funds moved)" : "PayPal Sandbox"}
                       </p>
                     </div>
                   </div>
@@ -172,21 +172,27 @@ export default function PaymentControlPage() {
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs">
                     <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
-                      <p className="text-slate-500">{isSim ? "Sim Intent ID" : "PayPal Order ID"}</p>
+                      <p className="text-slate-500">{isSim ? "Demo Order ID" : "PayPal Order ID"}</p>
                       <p className="mt-1 font-mono-code font-medium text-[#17243A] break-all">
                         {orderRef || "—"}
                       </p>
                     </div>
                     <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
-                      <p className="text-slate-500">{isSim ? "Sim Auth ID" : "Authorization ID"}</p>
+                      <p className="text-slate-500">{isSim ? "Demo Auth ID" : "Authorization ID"}</p>
                       <p className="mt-1 font-mono-code font-medium text-[#17243A] break-all">
                         {authRef || "—"}
                       </p>
                     </div>
                     <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
-                      <p className="text-slate-500">{isSim ? "Sim Capture ID" : "Capture ID"}</p>
+                      <p className="text-slate-500">
+                        {p.payment_status === "VOIDED" && isSim
+                          ? "Demo Void ID"
+                          : isSim
+                          ? "Demo Capture ID"
+                          : "Capture ID"}
+                      </p>
                       <p className="mt-1 font-mono-code font-medium text-[#17243A] break-all">
-                        {capRef || "—"}
+                        {(p.payment_status === "VOIDED" && isSim ? p.sim_void_id : capRef) || "—"}
                       </p>
                     </div>
                     <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
@@ -210,6 +216,8 @@ export default function PaymentControlPage() {
                         clientId={config.paypal.clientId}
                         configured={config.paypal.configured}
                         taskId={task.id}
+                        taskTitle={task.title}
+                        contractorName={project.contractor_name}
                         amountFormatted={formatMoney(p.amount_minor_units)}
                         onStatusMessage={(text, ok) => setToast({ text, ok })}
                         onSuccess={load}

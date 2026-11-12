@@ -55,11 +55,21 @@ function ProjectDetailContent() {
   // PayPal modal for funding a specific task
   const [fundingTask, setFundingTask] = useState<TaskBundle | null>(null);
 
+  // Edit Project modal state
+  const [editProjectOpen, setEditProjectOpen] = useState(false);
+  const [projTitle, setProjTitle] = useState("");
+  const [projDesc, setProjDesc] = useState("");
+  const [projLoc, setProjLoc] = useState("");
+  const [projContractorId, setProjContractorId] = useState("");
+  const [contractors, setContractors] = useState<Profile[]>([]);
+  const [savingProject, setSavingProject] = useState(false);
+
   const load = useCallback(async () => {
     try {
-      const [meRes, projRes] = await Promise.all([
+      const [meRes, projRes, listRes] = await Promise.all([
         fetch("/api/auth/me", { cache: "no-store" }),
         fetch(`/api/projects/${id}`, { cache: "no-store" }),
+        fetch("/api/projects", { cache: "no-store" }),
       ]);
       if (meRes.status === 401 || projRes.status === 401) {
         router.push("/login");
@@ -67,10 +77,14 @@ function ProjectDetailContent() {
       }
       const meJson = await meRes.json();
       const projJson = await projRes.json();
+      const listJson = listRes.ok ? await listRes.json().catch(() => ({})) : {};
       if (!projRes.ok) throw new Error(projJson.error || "Failed to load project");
       setUser(meJson.user);
       setConfig(meJson.config);
       setProject(projJson.project);
+      if (Array.isArray(listJson.contractors)) {
+        setContractors(listJson.contractors);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error loading project");
     } finally {
@@ -186,6 +200,43 @@ function ProjectDetailContent() {
     await load();
   }
 
+  function openEditProjectModal() {
+    if (!project) return;
+    setProjTitle(project.title);
+    setProjDesc(project.description);
+    setProjLoc(project.location);
+    setProjContractorId(project.contractor_id);
+    setEditProjectOpen(true);
+  }
+
+  async function saveProjectEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!project) return;
+    setSavingProject(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: projTitle,
+          description: projDesc,
+          location: projLoc,
+          contractor_id: projContractorId,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not update project details");
+      setEditProjectOpen(false);
+      setToast("Project details saved.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update project");
+    } finally {
+      setSavingProject(false);
+    }
+  }
+
   async function reconcileTask(taskId: string) {
     setError("");
     const res = await fetch(`/api/tasks/${taskId}/reconcile`, { method: "POST" });
@@ -194,7 +245,7 @@ function ProjectDetailContent() {
       setError(json.error || "Reconcile failed");
       return;
     }
-    setToast(json.message || "Payment status reconciled with PayPal.");
+    setToast(json.message || "Payment status reconciled.");
     await load();
   }
 
@@ -251,16 +302,22 @@ function ProjectDetailContent() {
             <ArrowLeft className="h-3.5 w-3.5" />
             Back to {user.role === "contractor" ? "Contractor Desk" : "Overview"}
           </Link>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" onClick={load}>
               <RefreshCw className="h-3.5 w-3.5" />
               Refresh
             </Button>
             {user.role === "homeowner" && (
-              <Button variant="primary" size="sm" onClick={openNewTaskModal}>
-                <Plus className="h-3.5 w-3.5" />
-                Add Repair Task
-              </Button>
+              <>
+                <Button variant="outline" size="sm" onClick={openEditProjectModal}>
+                  <Edit3 className="h-3.5 w-3.5" />
+                  Edit Project
+                </Button>
+                <Button variant="primary" size="sm" onClick={openNewTaskModal}>
+                  <Plus className="h-3.5 w-3.5" />
+                  Add Repair Task
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -407,23 +464,24 @@ function ProjectDetailContent() {
                       task.payment.paypal_capture_id ||
                       task.payment.sim_intent_id ||
                       task.payment.sim_authorization_id ||
-                      task.payment.sim_capture_id) && (
+                      task.payment.sim_capture_id ||
+                      task.payment.sim_void_id) && (
                       <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] px-3 py-2 font-mono-code text-[11px] text-slate-600 space-y-0.5">
                         <p className="font-sans font-semibold text-[10px] uppercase tracking-wider text-slate-500">
                           {task.payment.payment_mode === "simulation"
-                            ? "Simulation · No money moved"
+                            ? "Simulation · No funds moved"
                             : "PayPal Sandbox Reference"}
                         </p>
                         {(task.payment.paypal_order_id || task.payment.sim_intent_id) && (
                           <p className="truncate">
-                            {task.payment.payment_mode === "simulation" ? "Sim Intent" : "Order"}:{" "}
+                            {task.payment.payment_mode === "simulation" ? "Demo Order" : "Order"}:{" "}
                             {task.payment.sim_intent_id || task.payment.paypal_order_id}
                           </p>
                         )}
                         {(task.payment.paypal_authorization_id ||
                           task.payment.sim_authorization_id) && (
                           <p className="truncate">
-                            {task.payment.payment_mode === "simulation" ? "Sim Auth" : "Auth"}:{" "}
+                            {task.payment.payment_mode === "simulation" ? "Demo Auth" : "Auth"}:{" "}
                             {task.payment.sim_authorization_id ||
                               task.payment.paypal_authorization_id}
                           </p>
@@ -431,9 +489,14 @@ function ProjectDetailContent() {
                         {(task.payment.paypal_capture_id || task.payment.sim_capture_id) && (
                           <p className="truncate text-[#047857] font-semibold">
                             {task.payment.payment_mode === "simulation"
-                              ? "Sim Capture"
+                              ? "Demo Capture"
                               : "Capture"}
                             : {task.payment.sim_capture_id || task.payment.paypal_capture_id}
+                          </p>
+                        )}
+                        {task.payment.sim_void_id && (
+                          <p className="truncate text-slate-800 font-semibold">
+                            Demo Void: {task.payment.sim_void_id}
                           </p>
                         )}
                       </div>
@@ -603,7 +666,7 @@ function ProjectDetailContent() {
         }
         description={
           fundingTask && (fundingTask.payment.payment_mode || config.payment.mode) === "simulation"
-            ? "Runs in local Simulation mode (No money moved). Creates a simulated hold so you can complete the entire workflow offline."
+            ? "Runs in local Simulation mode (No funds moved). Creates a simulated hold so you can complete the entire workflow offline."
             : "Creates an independent PayPal Orders v2 AUTHORIZE hold. Funds are not captured until you accept the repair."
         }
       >
@@ -616,14 +679,83 @@ function ProjectDetailContent() {
             clientId={config.paypal.clientId}
             configured={config.paypal.configured}
             taskId={fundingTask.id}
+            taskTitle={fundingTask.title}
+            contractorName={project.contractor_name}
             amountFormatted={formatMoney(fundingTask.amount_minor_units)}
             onStatusMessage={(msg) => setToast(msg)}
+            onCancel={() => setFundingTask(null)}
             onSuccess={() => {
               setFundingTask(null);
               load();
             }}
           />
         )}
+      </Modal>
+
+      {/* Edit Project Modal */}
+      <Modal
+        open={editProjectOpen}
+        onClose={() => !savingProject && setEditProjectOpen(false)}
+        title="Edit Project Details"
+        description="Update project overview details or contractor assignment (prior to starting payments)."
+      >
+        <form onSubmit={saveProjectEdit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Project Title
+            </label>
+            <Input required value={projTitle} onChange={(e) => setProjTitle(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Location
+            </label>
+            <Input required value={projLoc} onChange={(e) => setProjLoc(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Description
+            </label>
+            <Textarea rows={3} value={projDesc} onChange={(e) => setProjDesc(e.target.value)} />
+          </div>
+          {contractors.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                Assigned Contractor
+              </label>
+              <select
+                value={projContractorId}
+                onChange={(e) => setProjContractorId(e.target.value)}
+                disabled={project.tasks.some((t) => t.payment_status !== "DRAFT")}
+                className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-[#17243A] disabled:opacity-60"
+              >
+                {contractors.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.email})
+                  </option>
+                ))}
+              </select>
+              {project.tasks.some((t) => t.payment_status !== "DRAFT") && (
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Contractor assignment is locked after payment authorization begins.
+                </p>
+              )}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={savingProject}
+              onClick={() => setEditProjectOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={savingProject}>
+              {savingProject ? "Saving..." : "Save Project"}
+            </Button>
+          </div>
+        </form>
       </Modal>
     </AppShell>
   );

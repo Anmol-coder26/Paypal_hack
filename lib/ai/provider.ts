@@ -28,6 +28,16 @@ import {
   getGuidedChecklistTemplate,
   retrieveRepairKnowledge,
 } from "./knowledge";
+import { matchPreparedDemoScenario } from "./prepared-demo";
+
+export function isDemoAIProviderActive(): boolean {
+  const raw = (process.env.AI_PROVIDER || "").trim().toLowerCase();
+  if (raw === "demo") return true;
+  const demoFlag = ["true", "1", "yes"].includes(
+    (process.env.PUNCHPAY_DEMO_MODE || "").trim().toLowerCase()
+  );
+  return demoFlag && !raw;
+}
 
 export const ScopeSuggestionSchema = z.object({
   improved_description: z.string().min(5),
@@ -939,6 +949,20 @@ export type OrchestratedInspectionOutcome =
       notice: string;
     }
   | {
+      outcome: "prepared_demo_completed";
+      scenarioId: string;
+      scenarioLabel: string;
+      provider: "demo";
+      model: string;
+      analysisSource: "prepared_demo";
+      findings: AIStructuredFindings;
+      recommendation: AIReviewRecord["recommendation"];
+      evidenceIds: string[];
+      imageHashes: string[];
+      inputFingerprint: string;
+      qualityWarnings: string[];
+    }
+  | {
       outcome: "ai_completed";
       provider: AIProviderType;
       model: string;
@@ -954,7 +978,11 @@ export type OrchestratedInspectionOutcome =
   | {
       outcome: "guided_fallback";
       activeTier: "guided_checklist";
-      reasonCode: GeminiErrorCode | "not_configured";
+      reasonCode:
+        | GeminiErrorCode
+        | "not_configured"
+        | "demo_unmatched_images"
+        | "demo_category_mismatch";
       message: string;
       qualityWarnings: string[];
       evidenceIds: string[];
@@ -967,8 +995,7 @@ const inFlightInspections = new Map<string, Promise<OrchestratedInspectionOutcom
 
 /**
  * 3-Tier Orchestrator:
- * Level 1: Gemini Live Vision -> Level 2: Local Ollama Vision -> Level 3: Guided Checklist Fallback.
- * Conserves free-tier quota with fingerprint caching & in-flight deduplication.
+ * Mode A: Gemini Live Vision -> Mode B: Local Ollama Vision -> Mode C: Prepared Demo (matched hash sets) / Guided Checklist Fallback.
  */
 export async function inspectTaskEvidenceWithFallback(opts: {
   task: TaskBundle;
@@ -996,28 +1023,78 @@ export async function inspectTaskEvidenceWithFallback(opts: {
     clearGeminiCooldown();
   }
 
-  // Free-tier conservation: reuse a verified genuine AI report when images, criteria, and notes are identical.
+  const demoAIActive = isDemoAIProviderActive() && !opts.geminiFactory && !opts.retryLiveAI;
+
+  // Free-tier conservation / deterministic caching: reuse verified matching review if inputs & evidence haven't changed.
   if (!opts.retryLiveAI) {
-    const cached = opts.task.reviews.find(
-      (r) => r.is_genuine_ai && r.input_fingerprint === inputFingerprint
+    const cached = opts.task.reviews.find((r) =>
+      demoAIActive
+        ? r.analysis_source === "prepared_demo" && r.input_fingerprint === inputFingerprint
+        : r.is_genuine_ai && r.input_fingerprint === inputFingerprint
     );
     if (cached) {
       return {
         outcome: "cached",
         cachedReview: cached,
         qualityWarnings: quality.warnings,
-        notice: `Reused verified ${cached.provider} inspection (${cached.model}) for unchanged photographs and criteria.`,
+        notice:
+          cached.analysis_source === "prepared_demo"
+            ? `Reused prepared sample inspection (${cached.model}) for unchanged demonstration photographs.`
+            : `Reused verified ${cached.provider} inspection (${cached.model}) for unchanged photographs and criteria.`,
       };
     }
   }
 
-  const dedupKey = `${opts.task.id}:${inputFingerprint}:${opts.retryLiveAI ? "retry" : "normal"}`;
+  const dedupKey = `${opts.task.id}:${inputFingerprint}:${demoAIActive ? "demo" : opts.retryLiveAI ? "retry" : "normal"}`;
   const existingFlight = inFlightInspections.get(dedupKey);
   if (existingFlight) {
     return existingFlight;
   }
 
   const work = (async (): Promise<OrchestratedInspectionOutcome> => {
+    // Deterministic Demo Mode (AI_PROVIDER=demo or PUNCHPAY_DEMO_MODE=true): zero external AI calls
+    if (demoAIActive) {
+      const prepared = await matchPreparedDemoScenario({
+        task: opts.task,
+        beforeImages: opts.beforeImages,
+        afterImages: opts.afterImages,
+        evidenceIds: quality.evidenceIds,
+        imageHashes: quality.allHashes,
+        inputFingerprint,
+        qualityWarnings: quality.warnings,
+      });
+      if (prepared.matched) {
+        return {
+          outcome: "prepared_demo_completed",
+          scenarioId: prepared.scenario.id,
+          scenarioLabel: prepared.scenario.label,
+          provider: "demo",
+          model: "prepared-demo-v1",
+          analysisSource: "prepared_demo",
+          findings: prepared.findings,
+          recommendation: prepared.recommendation,
+          evidenceIds: quality.evidenceIds,
+          imageHashes: quality.allHashes,
+          inputFingerprint,
+          qualityWarnings: quality.warnings,
+        };
+      }
+      return {
+        outcome: "guided_fallback",
+        activeTier: "guided_checklist",
+        reasonCode:
+          prepared.reason === "category_mismatch"
+            ? "demo_category_mismatch"
+            : "demo_unmatched_images",
+        message: prepared.message,
+        qualityWarnings: quality.warnings,
+        evidenceIds: quality.evidenceIds,
+        imageHashes: quality.allHashes,
+        inputFingerprint,
+        template: getGuidedChecklistTemplate(opts.task),
+      };
+    }
+
     const geminiCred = await resolveGeminiCredential();
     const cooldown = getGeminiCooldownState();
     let fallbackReasonCode: GeminiErrorCode | "not_configured" = "not_configured";
@@ -1252,9 +1329,9 @@ export async function answerInspectionQuestion(opts: {
     };
   }
 
-  // 3. Try Level 1 (Gemini) or explicit override or Level 2 (Ollama) if reachable
+  // 3. Try Level 1 (Gemini) or explicit override or Level 2 (Ollama) if reachable (unless Demo Mode active)
   let cfg: ActiveAIProviderConfig | null = opts.aiOverride ?? null;
-  if (!cfg) {
+  if (!cfg && !isDemoAIProviderActive()) {
     const gem = await resolveGeminiCredential();
     if (gem.configured && gem.apiKey && !getGeminiCooldownState().active) {
       cfg = { provider: "gemini", apiKey: gem.apiKey, model: gem.model };

@@ -25,7 +25,7 @@ export default function LandingPage() {
               PunchPay
             </span>
             <span className="hidden sm:inline-block rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
-              PayPal Sandbox
+              Demo Ready · PayPal v2 Architecture
             </span>
           </Link>
 

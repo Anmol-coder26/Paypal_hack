@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   FolderPlus,
   RefreshCw,
+  RotateCcw,
   Sparkles,
 } from "lucide-react";
 import { AllocationBar } from "@/components/payments/AllocationBar";
@@ -16,6 +17,7 @@ import { AppShell } from "@/components/shell/AppShell";
 import {
   Button,
   Card,
+  Modal,
   PaymentStatusBadge,
   Skeleton,
 } from "@/components/ui/primitives";
@@ -38,6 +40,8 @@ export default function HomeownerDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resettingDemo, setResettingDemo] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "COMPLETED">("ALL");
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
@@ -90,6 +94,25 @@ export default function HomeownerDashboardPage() {
     }
   }
 
+  async function resetGuidedDemo() {
+    setResettingDemo(true);
+    setError("");
+    try {
+      const res = await fetch("/api/demo/reset", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not reset guided demo");
+      setResetConfirmOpen(false);
+      await loadData();
+      if (json.project?.id) {
+        router.push(`/projects/${json.project.id}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reset guided demo");
+    } finally {
+      setResettingDemo(false);
+    }
+  }
+
   const metrics = useMemo(() => {
     const allTasks = projects.flatMap((p) => p.tasks);
     const totalRepairMinor = allTasks.reduce((sum, t) => sum + t.amount_minor_units, 0);
@@ -121,6 +144,9 @@ export default function HomeownerDashboardPage() {
         ["EVIDENCE_SUBMITTED", "AI_REVIEWED"].includes(t.work_status) &&
         t.payment_status === "AUTHORIZED"
     ).length;
+    const correctionsCount = allTasks.filter(
+      (t) => t.work_status === "CORRECTIONS_REQUESTED"
+    ).length;
 
     return {
       totalRepairMinor,
@@ -130,6 +156,7 @@ export default function HomeownerDashboardPage() {
       paypalCapturedMinor,
       simCapturedMinor,
       awaitingDecisionCount,
+      correctionsCount,
       allTasks,
     };
   }, [projects]);
@@ -210,6 +237,12 @@ export default function HomeownerDashboardPage() {
               <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
             </Button>
+            {projects.some((p) => p.is_guided_demo) && (
+              <Button variant="outline" onClick={() => setResetConfirmOpen(true)}>
+                <RotateCcw className="h-4 w-4 text-slate-600" />
+                Reset Demo
+              </Button>
+            )}
             <Button variant="secondary" onClick={launchGuidedDemo} disabled={creatingDemo}>
               <Sparkles className="h-4 w-4 text-blue-300" />
               {creatingDemo ? "Creating Demo..." : "Continue Guided Demo ($50)"}
@@ -220,6 +253,22 @@ export default function HomeownerDashboardPage() {
                 New Project
               </Button>
             </Link>
+          </div>
+        </div>
+
+        {/* Compact nonintrusive rehearsal bar */}
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-[#17243A]">
+              Rehearsal Flow
+            </span>
+            <span>1. Open project &amp; authorize holds</span>
+            <span className="text-slate-300">→</span>
+            <span>2. Switch to Demo Contractor &amp; upload photos</span>
+            <span className="text-slate-300">→</span>
+            <span>3. Switch back, inspect &amp; Capture $30 / Void $20</span>
+            <span className="text-slate-300">→</span>
+            <span>4. Verify Ledger &amp; reload</span>
           </div>
         </div>
 
@@ -256,7 +305,7 @@ export default function HomeownerDashboardPage() {
                   : metrics.paypalCapturedMinor > 0
                   ? "PayPal Sandbox verified"
                   : metrics.simCapturedMinor > 0
-                  ? "Simulation (no money moved)"
+                  ? "Simulation (no funds moved)"
                   : "No captures yet",
               tone: "text-[#047857]",
             },
@@ -267,10 +316,13 @@ export default function HomeownerDashboardPage() {
               tone: "text-slate-700",
             },
             {
-              label: "Pending Reviews",
-              value: String(metrics.awaitingDecisionCount),
-              sub: "Awaiting decision",
-              tone: metrics.awaitingDecisionCount > 0 ? "text-[#B45309]" : "text-[#17243A]",
+              label: "Pending & Corrections",
+              value: `${metrics.awaitingDecisionCount} / ${metrics.correctionsCount}`,
+              sub: `${metrics.awaitingDecisionCount} review · ${metrics.correctionsCount} corrections req.`,
+              tone:
+                metrics.awaitingDecisionCount > 0 || metrics.correctionsCount > 0
+                  ? "text-[#B45309]"
+                  : "text-[#17243A]",
             },
           ].map((kpi) => (
             <Card key={kpi.label} className="p-4">
@@ -521,6 +573,32 @@ export default function HomeownerDashboardPage() {
           </div>
         </div>
       </div>
+      <Modal
+        open={resetConfirmOpen}
+        onClose={() => !resettingDemo && setResetConfirmOpen(false)}
+        title="Reset Guided Demo?"
+        description="Restores only the seeded Kitchen Renovation Closeout ($50) demonstration project to its starting state. Any custom projects or unrelated financial records will remain intact."
+      >
+        <div className="space-y-4 text-xs text-slate-600">
+          <p>
+            This clears only guided demo tasks, uploaded sample photos, and simulated demo
+            transactions for <strong>Kitchen Renovation Closeout</strong>, then recreates a fresh
+            project with <strong>Painting ($30.00)</strong> and <strong>Tile Repair ($20.00)</strong>.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              disabled={resettingDemo}
+              onClick={() => setResetConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={resettingDemo} onClick={resetGuidedDemo}>
+              {resettingDemo ? "Resetting Demo..." : "Confirm Reset Demo"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </AppShell>
   );
 }

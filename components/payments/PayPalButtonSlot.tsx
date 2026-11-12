@@ -53,18 +53,24 @@ export function PayPalButtonSlot({
   clientId,
   configured,
   taskId,
+  taskTitle,
+  contractorName,
   amountFormatted,
   existingOrderId,
   onSuccess,
+  onCancel,
   onStatusMessage,
 }: {
   paymentMode?: PaymentMode;
   clientId: string | null;
   configured: boolean;
   taskId: string;
+  taskTitle?: string;
+  contractorName?: string;
   amountFormatted: string;
   existingOrderId?: string | null;
   onSuccess: () => void;
+  onCancel?: () => void;
   onStatusMessage?: (msg: string, ok: boolean) => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -205,36 +211,66 @@ export function PayPalButtonSlot({
 
   if (paymentMode === "simulation") {
     return (
-      <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3 text-xs">
+      <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3.5 text-xs">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="inline-flex items-center gap-1.5 font-semibold text-[#17243A]">
             <ShieldCheck className="h-4 w-4 text-blue-600" />
-            Simulated Checkout Flow · No money moved
+            Demo environment · Payments simulated
           </span>
           <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-            Simulation Mode
+            No funds moved
           </span>
         </div>
 
+        <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-[#F7F8FA] p-3 text-[11px]">
+          {taskTitle && (
+            <div>
+              <span className="text-slate-500">Repair Task:</span>{" "}
+              <span className="font-semibold text-[#17243A]">{taskTitle}</span>
+            </div>
+          )}
+          {contractorName && (
+            <div>
+              <span className="text-slate-500">Contractor:</span>{" "}
+              <span className="font-semibold text-[#17243A]">{contractorName}</span>
+            </div>
+          )}
+          <div>
+            <span className="text-slate-500">Hold Amount:</span>{" "}
+            <span className="font-mono-code font-semibold text-[#17243A]">{amountFormatted} USD</span>
+          </div>
+          <div>
+            <span className="text-slate-500">Environment:</span>{" "}
+            <span className="font-medium text-slate-700">Local Simulation</span>
+          </div>
+        </div>
+
+        <p className="text-[11px] text-slate-600 leading-relaxed">
+          <strong>What authorization means:</strong> Creates an isolated task-level hold without
+          charging immediately. Funds remain uncaptured until you inspect the repair evidence and
+          explicitly confirm Capture or Void.
+        </p>
+
         {!simIntentId ? (
-          <div className="space-y-2.5">
-            <p className="text-slate-600 leading-relaxed">
-              Step 1 creates a task-scoped simulated intent ({amountFormatted}). Step 2 records your
-              simulated buyer approval and authorization hold in SQLite without contacting PayPal.
-            </p>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button
               variant="primary"
               size="md"
               disabled={simBusy}
               onClick={handleSimCreateIntent}
             >
-              {simBusy ? "Creating Simulated Intent..." : `Create ${amountFormatted} Simulated Hold Intent`}
+              {simBusy ? "Creating Demo Order..." : `Create ${amountFormatted} Demo Order`}
             </Button>
+            {onCancel && (
+              <Button variant="outline" size="md" disabled={simBusy} onClick={onCancel}>
+                Cancel
+              </Button>
+            )}
           </div>
         ) : (
           <div className="space-y-3">
             <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3 font-mono-code text-[11px] text-slate-700 space-y-1">
-              <p>Simulated Intent: {simIntentId}</p>
+              <p>Demo Order: {simIntentId}</p>
               <p>Amount: {amountFormatted} USD · Status: BUYER_APPROVAL_PENDING</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -244,7 +280,7 @@ export function PayPalButtonSlot({
                 disabled={simBusy}
                 onClick={() => handleSimApprove(false)}
               >
-                {simBusy ? "Authorizing..." : `Approve ${amountFormatted} Hold (Simulation)`}
+                {simBusy ? "Authorizing Hold..." : `Confirm Buyer Approval (${amountFormatted} Hold)`}
               </Button>
               <Button
                 variant="outline"
@@ -254,6 +290,11 @@ export function PayPalButtonSlot({
               >
                 Simulate Timeout (Test Reconcile)
               </Button>
+              {onCancel && (
+                <Button variant="ghost" size="sm" disabled={simBusy} onClick={onCancel}>
+                  Cancel
+                </Button>
+              )}
             </div>
           </div>
         )}
