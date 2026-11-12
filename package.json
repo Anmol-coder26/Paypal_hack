@@ -2,6 +2,11 @@
   "name": "punchpay-v2",
   "version": "2.0.0",
   "private": true,
+  "author": "Anmol Singh <251868717+Anmol-coder26@users.noreply.github.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Anmol-coder26/Paypal_hack.git"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

@@ -1,109 +1,131 @@
-# PunchPay 2.1
+# PunchPay — PayPal AI Hackathon
 
-**Every fix has its own payment.** *Review the work. Decide what gets paid.*
+> **Every fix has its own payment.** *Review the work. Decide what gets paid.*  
+> **Author:** [Anmol Singh](https://github.com/Anmol-coder26) · **License:** [MIT](LICENSE)
 
-PunchPay is an AI-assisted repair-evidence verification and **PayPal task-level payment settlement** workspace built for the PayPal AI Hackathon 2026. Homeowners fund independent PayPal Orders v2 authorizations (`intent: "AUTHORIZE"`) per repair task, contractors submit before-and-after photographic evidence, multimodal Vision AI provides advisory findings against agreed criteria, and homeowners explicitly trigger PayPal Payments v2 **Capture** or **Void** decisions.
+PunchPay is an AI-assisted repair-evidence verification and **task-level PayPal settlement workspace**. Instead of forcing homeowners and contractors into unfair all-or-nothing lump sums, each repair task receives its own independent authorization hold (for example, **$30.00 Painting** and **$20.00 Tile Repair**). Contractors submit before-and-after photographic evidence, vision analysis or structured checklists summarize visible evidence against agreed criteria, and homeowners decide independently what to **Capture** or **Void**.
 
-> **PayPal Authorization Disclosure:** PunchPay uses **PayPal Sandbox** temporary payment authorizations (up to 29-day validity with an initial 3-day honor period). PunchPay is **not** an escrow service. Local **Simulation mode** runs strictly offline when PayPal Sandbox keys are absent and never moves real money.
+> **Transparency & Payment Disclosure:**  
+> - PunchPay models **temporary payment authorizations** (not escrow) using PayPal Orders v2 (`intent: "AUTHORIZE"`) & Payments v2 (`Capture` / `Void`).  
+> - By default in `.env.example`, PunchPay boots in **Interactive Demo Mode** (`PUNCHPAY_DEMO_MODE=true`, `PAYMENT_MODE=simulation`, `AI_PROVIDER=demo`) so judges and reviewers can run the entire workflow locally with **zero external API keys**. Every simulated action is explicitly labeled **`Demo environment · Payments simulated`** (`DEMO-ORD-*`, `DEMO-AUTH-*`, `DEMO-CAP-*`, `DEMO-VOID-*`), and prepared sample inspections are labeled **`Sample inspection · Prepared findings`**.  
+> - Real **PayPal Sandbox** (`PAYMENT_MODE=paypal_sandbox`) and **Gemini Vision / Ollama** integrations remain intact and can be enabled via `.env.local` and the Admin Vault (`/settings`).
 
 ---
 
-## PayPal Settlement Lifecycle (Task-Scoped & Verified)
+## Visual Tour (Actual Website Screenshots)
 
-Every repair task maintains an isolated financial state machine paired with direct PayPal v2 API verification:
+### 1. Landing Overview & Split-Settlement Model
+![PunchPay Landing Page](docs/screenshots/01-landing-desktop.png)
 
+### 2. Project Workspace, Task Timelines & Final Settlement Statement
+Two independent repairs settled separately: **$30.00 Painting (`DEMO-CAP-*`)** accepted and captured, **$20.00 Tile Repair (`DEMO-VOID-*`)** rejected and voided — cleanly tracked in SQLite.
+
+![Kitchen Renovation Closeout Project Detail](docs/screenshots/02-project-detail-desktop.png)
+
+### 3. Contractor Desk, Sharp-Verified Photo Kit, Pin Annotations & Comparison Tools
+Supports drag-and-drop uploads, `Demo Photo Kit` presets, click-to-drop synchronized callout pins, `Wipe` slider, `Overlay` onion-skin, and `2×` zoom.
+
+![Contractor Evidence Workspace](docs/screenshots/04-contractor-evidence-desktop.png)
+
+### 4. Settlement Ledger & CSV Audit Export
+Persistent transaction history separated cleanly by source (`Simulation` vs `PayPal`), searchable and filterable with `DEMO-*` capture and void references.
+
+![Settlement Ledger](docs/screenshots/03-settlement-ledger-desktop.png)
+
+### 5. PayPal Fault-Recovery Lab, Diagnostics & Mobile Experience
+
+<table>
+  <tr>
+    <td width="65%" valign="top">
+      <strong>PayPal Fault-Recovery & Idempotency Lab (<code>/playground</code>)</strong><br/>
+      <img src="docs/screenshots/06-paypal-fault-lab-desktop.png" alt="PayPal Fault Lab" />
+      <br/><br/>
+      <strong>Settings, Mode Diagnostics & Encrypted Admin Vault (<code>/settings</code>)</strong><br/>
+      <img src="docs/screenshots/07-settings-ai-config-desktop.png" alt="Settings and Admin AI Config" />
+    </td>
+    <td width="35%" valign="top">
+      <strong>Responsive Mobile Project View</strong><br/>
+      <img src="docs/screenshots/05-project-detail-mobile.png" alt="Mobile Project Detail" />
+    </td>
+  </tr>
+</table>
+
+---
+
+## Key Features & Architecture
+
+### Financial Lifecycle (Task-Scoped Authorization -> Capture / Void)
 ```text
-[1. Order Created] ──▶ [2. Buyer Approved] ──▶ [3. Authorized Hold] ──┬──▶ Accept & Capture ($30.00) ──▶ CAPTURED
- POST /v2/checkout/orders   PayPal Checkout Popup   POST .../authorize │    POST /v2/payments/authorizations/{id}/capture
- (intent: "AUTHORIZE",      (Personal Sandbox Acct)                    │
-  payee: PAYPAL_MERCHANT_ID)                                           └──▶ Reject & Void ($20.00) ────▶ VOIDED
-                                                                            POST /v2/payments/authorizations/{id}/void
-
-                         ▲ GET Reconciliation & Proof ▲
-  GET /v2/checkout/orders/{id} · GET /v2/payments/authorizations/{id} · GET /v2/payments/captures/{id}
+[1. Create Order] ──▶ [2. Buyer Approval] ──▶ [3. Authorized Hold] ──┬──▶ Accept & Capture ($30.00) ──▶ CAPTURED
+  DEMO-ORD-* /         Realistic Approval       DEMO-AUTH-* /         │
+  PayPal Orders v2     Confirmation Modal       PayPal Authorizations │
+                                                                      └──▶ Reject & Void ($20.00) ────▶ VOIDED
+                                                                           DEMO-VOID-* / PayPal Void
 ```
+- **Homeowner Authority Only:** Contractors can upload evidence and request reviews, while authorization, capture, correction requests, and voiding are strictly gated (`403`) to the homeowner role.
+- **Buyer-Approval Confirmation Flow:** Authorizing a task opens an explicit approval modal displaying the repair task, contractor, hold amount, and what an authorization hold means before issuing `DEMO-ORD-*` -> `DEMO-AUTH-*`.
+- **Safe `Reset Demo` & Project Editing:** Homeowners can edit projects (`PATCH /api/projects/[id]`) and reset only guided demo data (`POST /api/demo/reset`) without deleting their own custom projects.
 
-- **Payee & Currency Guards:** Every order, authorization, capture, and void checks `PAYPAL_MERCHANT_ID`, `currency_code === "USD"`, integer minor-unit totals, and parent-order/authorization linkage (`lib/payments/paypal-client.ts`).
-- **Idempotency & Crash Recovery:** Every mutating PayPal call uses stable `PayPal-Request-Id` keys recorded in `idempotency_operations`. Dropped requests enter `RECONCILIATION_REQUIRED` and resolve via `GET` reconciliation (`/api/tasks/[id]/reconcile`).
-- **Visible Provenance:** Every task card (`/projects/[id]`), `/payments` panel, `/tasks/[id]` detail view, and `/ledger` row displays the 4-step `PaymentLifecycleTimeline`, exact provider IDs (`paypal_order_id`, `paypal_authorization_id`, `paypal_capture_id`), and `PayPal Sandbox` vs. `Simulation · No money moved` badges.
+### Inspection Architecture (Prepared Demo + 4-Prompt Guided Review + Preserved Live AI)
+1. **Prepared Demo Inspection (`AI_PROVIDER=demo`):** Matches 6 curated domain scenarios in `public/demo-kit/` using normalized 160×120 RGB SHA-256 hashes + repair-category validation (`lib/ai/prepared-demo.ts`) with zero live API calls, explicitly badged **Sample inspection · Prepared findings**.
+2. **Honest Guided Review Fallback (`POST /api/tasks/[id]/guided-review`):** Uploading any arbitrary non-sample image automatically switches to a 4-prompt human visual inspection checklist (**Guided Review — Visual assessment by homeowner**), refusing to attach fake AI verdicts to uninspected photos.
+3. **Preserved Live Gemini Vision & Local Ollama (`lib/ai/provider.ts`):** When enabled outside Demo Mode, supports Gemini multimodal evidence analysis (`@google/genai`), AES-256-GCM Admin Vault key storage (`lib/security/secrets-vault.ts`), and automatic fallback to local Ollama vision (`qwen2.5vl:3b`).
 
----
-
-## Core Architecture & Capabilities
-
-- **3-Tier Advisory AI Inspection (`lib/ai/provider.ts`)**:
-  1. **Gemini Live Vision (`gemini-3.5-flash`)** — Server-side multimodal before/after image comparison, Zod-validated 9-part structured findings, explicit limitations, and contextual Q&A (`/api/tasks/[id]/ask`).
-  2. **Local Ollama Vision (`OLLAMA_MODEL`, e.g. `qwen2.5vl:3b`)** — Automatic offline fallback when a local Ollama vision daemon is reachable at `OLLAMA_BASE_URL`.
-  3. **Guided Review Checklist (`POST /api/tasks/[id]/guided-review`)** — Honest human-authored structured checklist fallback when no vision model is available; never claims AI inspected photos.
-- **Encrypted Admin AI Vault (`/settings`, `lib/security/secrets-vault.ts`)**: Admin-only workspace storing Gemini keys encrypted at rest with AES-256-GCM (`.data/.vault/credential-master.key` or `PUNCHPAY_CREDENTIAL_ENCRYPTION_KEY`); plaintext secrets never return to browser clients.
-- **Role-Based Auth & Private Evidence (`/login`, `/api/evidence/[id]`)**: HMAC-SHA256 HTTP-only cookie sessions with scrypt password hashing across Homeowner, Contractor, and System Administrator roles. Uploaded photos are validated via `sharp`, EXIF-stripped, stored outside `public/`, and compared side-by-side with click-to-drop synchronized pins, wipe slider, onion-skin overlay, and `2×` zoom.
-- **PayPal Fault-Recovery Lab (`/playground`)**: Separated simulator demonstrating split settlement, network timeout recovery (`RECONCILIATION_REQUIRED` -> `GET` reconcile), double-click idempotency, and payee mismatch guards.
-- **Dual Persistence (`lib/db/`)**: Zero-config local SQLite (`node:sqlite` at `.data/punchpay.db`) or optional Supabase PostgreSQL + private Storage (`supabase/migrations/`).
+### Security & Persistence
+- **Media Safety (`lib/image.ts`):** Server-side `sharp` decoding, EXIF stripping, size checks, and private file storage outside `public/` served only to authorized roles via `/api/evidence/[id]`.
+- **SQLite (`node:sqlite`) & Optional Supabase (`lib/db/`):** Runs out of the box with `.data/punchpay.db` (`payment_records.sim_void_id`, project/task/evidence/audit persistence) or optional PostgreSQL + Supabase Storage.
 
 ---
 
-## Quick Local Setup & Real PayPal Sandbox Configuration
+## Quick Start (Zero-Config Interactive Demo)
 
 ```bash
+git clone https://github.com/Anmol-coder26/Paypal_hack.git
+cd Paypal_hack
 npm install
 cp .env.example .env.local
-```
-
-### 1. Configure PayPal Sandbox (`.env.local`)
-Create a **Sandbox Business** account (contractor/payee) and **Sandbox Personal** account (homeowner/payer) in [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/), then set in `.env.local` (gitignored):
-
-```ini
-PAYMENT_MODE=paypal_sandbox
-PAYPAL_CLIENT_ID=<sandbox_rest_app_client_id>
-PAYPAL_CLIENT_SECRET=<sandbox_rest_app_secret>
-NEXT_PUBLIC_PAYPAL_CLIENT_ID=<sandbox_rest_app_client_id>
-PAYPAL_MERCHANT_ID=<sandbox_business_account_merchant_id>
-# Optional for webhook signature verification:
-PAYPAL_WEBHOOK_ID=<sandbox_webhook_id>
-```
-
-### 2. Configure Gemini AI Credentials (Recommended: Encrypted Admin Vault)
-Sign in as **System Administrator** on `/login`, open **Settings (`/settings`)**, paste a valid Google AI Studio `GEMINI_API_KEY`, select `gemini-3.5-flash`, and click **Test Connection**. *(Alternatively set `GEMINI_API_KEY` and `GEMINI_MODEL=gemini-3.5-flash` in `.env.local`.)*
-
-### 3. Run & Verify
-
-```bash
-npm run lint
-npm run typecheck
-npm test
 npm run build
-npm run test:e2e
-npm run dev
+npm run start
 ```
 
-Open `http://localhost:3000`. Optional PayPal CLI smoke verification (`GET`-verified `$30` capture + `$20` void):
+Open **`http://localhost:3000`**, click **Start a Project**, and use the one-click role sign-in cards (**Demo Homeowner** or **Demo Contractor**) on `/login`. See [PUNCHPAY_FINAL_DEMO_SCRIPT.md](PUNCHPAY_FINAL_DEMO_SCRIPT.md) for the step-by-step 3-minute walkthrough.
 
-```bash
-npm run sandbox:create
-# Open both printed PayPal approval URLs and approve with your Sandbox Personal buyer account
-npm run sandbox:settle
-npm run sandbox:verify
+<details>
+<summary>Optional: Switching to Live PayPal Sandbox & Gemini Vision</summary>
+
+Update `.env.local`:
+```ini
+PUNCHPAY_DEMO_MODE=false
+PAYMENT_MODE=paypal_sandbox
+PAYPAL_CLIENT_ID=<sandbox_client_id>
+PAYPAL_CLIENT_SECRET=<sandbox_client_secret>
+NEXT_PUBLIC_PAYPAL_CLIENT_ID=<sandbox_client_id>
+PAYPAL_MERCHANT_ID=<sandbox_merchant_id>
+
+AI_PROVIDER=gemini
+GEMINI_MODEL=gemini-3.5-flash
+# Set GEMINI_API_KEY in .env.local or save encrypted via /settings as System Administrator
 ```
+</details>
 
 ---
 
-## Documentation
+## Verification Matrix
 
-- [Setup & Migration Guide](docs/SETUP.md)
+| Check | Command | Result | Scope |
+|---|---|---|---|
+| **Lint & Typecheck** | `npm run lint && npm run typecheck` | **PASS** | `eslint .` (0 errors) + `tsc --noEmit` |
+| **Unit & Integration** | `npm test` | **PASS (`23/23` across `7` files)** | Demo matching/category guard, simulation settlement & void persistence, PayPal client & state machine |
+| **Browser E2E + Axe** | `npm run test:e2e` | **PASS (`4/4`)** | Chromium `desktop` (`1440×900`) & `mobile` (`Pixel 7`), Axe critical/serious contrast & structure checks |
+| **Security Probes** | `security-probe.mjs` | **PASS (`6/6`)** | Auth/RBAC boundaries, hosted secret fail-closed (`500`), image sanitization, webhook guard (`503`), `ACCEPTED` lock (`409`) |
+
+---
+
+## Project Documentation
+
+- [Demo Readiness Report](PUNCHPAY_DEMO_READINESS.md)
+- [3-Minute Final Demo Script](PUNCHPAY_FINAL_DEMO_SCRIPT.md)
+- [Setup & Environment Guide](docs/SETUP.md)
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [API Reference](docs/API.md)
-- [3-Minute Demo Script](DEMO-SCRIPT.md)
-- [License (MIT)](LICENSE)
-
----
-
-## Verification Status
-
-| Area | Check / Mode | Result | Evidence |
-|---|---|---|---|
-| **Lint & TypeScript** | `npm run lint`, `npm run typecheck` | **PASS** | `eslint .` (0 errors), `tsc --noEmit` |
-| **Unit & Integration Suite** | `npm test` (mocked PayPal HTTP) | **PASS (21/21 across 6 files)** | `tests/*.test.ts` |
-| **Security Boundary Probes** | `security-probe.mjs` | **PASS (6/6)** | Hosted fail-closed, RBAC, EXIF/magic-byte check, webhook `503` guard |
-| **Playwright Browser E2E** | `npm run test:e2e` (Desktop + Mobile) | **PASS (4/4)** | `e2e/punchpay.spec.ts`, `docs/screenshots/` |
-| **Live Gemini Vision (`gemini-3.5-flash`)** | Multimodal inspection & Q&A | **PASS (verified via Admin Vault)** | Live before/after analysis + Q&A persisted in SQLite (`07`–`09` screenshots); rotated key replacement pending user |
-| **Live PayPal Sandbox End-to-End** | Real `/v2/checkout/orders` & `payments` | **Pending Sandbox Keys** | `.env.local` PayPal variables currently empty |
+- [MIT License](LICENSE)
