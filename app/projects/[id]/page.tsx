@@ -404,17 +404,36 @@ function ProjectDetailContent() {
 
                     {(task.payment.paypal_order_id ||
                       task.payment.paypal_authorization_id ||
-                      task.payment.paypal_capture_id) && (
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono-code text-[11px] text-slate-600 space-y-0.5">
-                        {task.payment.paypal_order_id && (
-                          <p className="truncate">Order: {task.payment.paypal_order_id}</p>
+                      task.payment.paypal_capture_id ||
+                      task.payment.sim_intent_id ||
+                      task.payment.sim_authorization_id ||
+                      task.payment.sim_capture_id) && (
+                      <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] px-3 py-2 font-mono-code text-[11px] text-slate-600 space-y-0.5">
+                        <p className="font-sans font-semibold text-[10px] uppercase tracking-wider text-slate-500">
+                          {task.payment.payment_mode === "simulation"
+                            ? "Simulation · No money moved"
+                            : "PayPal Sandbox Reference"}
+                        </p>
+                        {(task.payment.paypal_order_id || task.payment.sim_intent_id) && (
+                          <p className="truncate">
+                            {task.payment.payment_mode === "simulation" ? "Sim Intent" : "Order"}:{" "}
+                            {task.payment.sim_intent_id || task.payment.paypal_order_id}
+                          </p>
                         )}
-                        {task.payment.paypal_authorization_id && (
-                          <p className="truncate">Auth: {task.payment.paypal_authorization_id}</p>
+                        {(task.payment.paypal_authorization_id ||
+                          task.payment.sim_authorization_id) && (
+                          <p className="truncate">
+                            {task.payment.payment_mode === "simulation" ? "Sim Auth" : "Auth"}:{" "}
+                            {task.payment.sim_authorization_id ||
+                              task.payment.paypal_authorization_id}
+                          </p>
                         )}
-                        {task.payment.paypal_capture_id && (
-                          <p className="truncate text-emerald-700 font-semibold">
-                            Capture: {task.payment.paypal_capture_id}
+                        {(task.payment.paypal_capture_id || task.payment.sim_capture_id) && (
+                          <p className="truncate text-[#047857] font-semibold">
+                            {task.payment.payment_mode === "simulation"
+                              ? "Sim Capture"
+                              : "Capture"}
+                            : {task.payment.sim_capture_id || task.payment.paypal_capture_id}
                           </p>
                         )}
                       </div>
@@ -426,8 +445,8 @@ function ProjectDetailContent() {
                       <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 flex items-center gap-2">
                         <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
                         <span>
-                          Outcome pending PayPal confirmation. Use <strong>Sync PayPal</strong>{" "}
-                          (read-only GET) instead of retrying.
+                          Outcome pending confirmation. Click <strong>Reconcile Status</strong>{" "}
+                          instead of retrying.
                         </span>
                       </div>
                     )}
@@ -457,14 +476,14 @@ function ProjectDetailContent() {
                           )}
                         </>
                       )}
-                      {task.payment.paypal_order_id && (
+                      {(task.payment.paypal_order_id || task.payment.sim_intent_id) && (
                         <Button
                           size="sm"
                           variant="ghost"
                           onClick={() => reconcileTask(task.id)}
                         >
                           <RefreshCw className="h-3.5 w-3.5" />
-                          Sync PayPal
+                          Reconcile Status
                         </Button>
                       )}
                     </div>
@@ -476,7 +495,9 @@ function ProjectDetailContent() {
                           variant="primary"
                           onClick={() => setFundingTask(task)}
                         >
-                          Authorize {formatMoney(task.amount_minor_units)}
+                          {(task.payment.payment_mode || config.payment.mode) === "simulation"
+                            ? `Authorize ${formatMoney(task.amount_minor_units)} (Sim)`
+                            : `Authorize ${formatMoney(task.amount_minor_units)}`}
                         </Button>
                       )}
                       <Link href={`/tasks/${task.id}`}>
@@ -489,7 +510,7 @@ function ProjectDetailContent() {
                             : task.work_status === "AI_REVIEWED" ||
                               task.work_status === "EVIDENCE_SUBMITTED"
                             ? "Inspect & Decide"
-                            : "Open Task Details"}
+                            : "Open Evidence Review"}
                           <ArrowRight className="h-3.5 w-3.5" />
                         </Button>
                       </Link>
@@ -571,7 +592,7 @@ function ProjectDetailContent() {
         </form>
       </Modal>
 
-      {/* PayPal Authorization Modal */}
+      {/* Authorization Modal */}
       <Modal
         open={Boolean(fundingTask)}
         onClose={() => setFundingTask(null)}
@@ -580,10 +601,18 @@ function ProjectDetailContent() {
             ? `Authorize ${formatMoney(fundingTask.amount_minor_units)} for ${fundingTask.title}`
             : ""
         }
-        description="Creates an independent PayPal Orders v2 AUTHORIZE hold. Funds are not captured until you accept the repair."
+        description={
+          fundingTask && (fundingTask.payment.payment_mode || config.payment.mode) === "simulation"
+            ? "Runs in local Simulation mode (No money moved). Creates a simulated hold so you can complete the entire workflow offline."
+            : "Creates an independent PayPal Orders v2 AUTHORIZE hold. Funds are not captured until you accept the repair."
+        }
       >
         {fundingTask && (
           <PayPalButtonSlot
+            paymentMode={fundingTask.payment.payment_mode || config.payment.mode}
+            existingOrderId={
+              fundingTask.payment.sim_intent_id || fundingTask.payment.paypal_order_id
+            }
             clientId={config.paypal.clientId}
             configured={config.paypal.configured}
             taskId={fundingTask.id}

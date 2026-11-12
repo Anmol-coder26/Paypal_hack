@@ -536,7 +536,13 @@ export default function ContractorWorkspacePage() {
                         <Button
                           size="sm"
                           variant="primary"
+                          title={
+                            !config.ai.configured
+                              ? "Configure local Ollama or Gemini/Claude key to enable AI inspection"
+                              : undefined
+                          }
                           disabled={
+                            !config.ai.configured ||
                             busyAction === "ai" ||
                             !activeEntry.task.evidence.some(
                               (e) => e.evidence_type === "before"
@@ -549,10 +555,12 @@ export default function ContractorWorkspacePage() {
                         >
                           <Sparkles className="h-3.5 w-3.5" />
                           {busyAction === "ai"
-                            ? "Running AI Inspection..."
+                            ? `Reviewing ${activeEntry.task.acceptance_criteria.length} criteria…`
                             : activeEntry.task.latest_review
                             ? "Re-run AI Inspection"
-                            : "Run AI Inspection"}
+                            : config.ai.configured
+                            ? "Run AI Inspection"
+                            : "AI Offline (Manual Checklist)"}
                         </Button>
                         <Link href={`/tasks/${activeEntry.task.id}`}>
                           <Button size="sm" variant="outline">

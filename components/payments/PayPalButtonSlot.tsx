@@ -2,8 +2,9 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertCircle, CheckCircle2, RefreshCw } from "lucide-react";
+import { AlertCircle, CheckCircle2, RefreshCw, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/primitives";
+import type { PaymentMode } from "@/lib/types";
 
 declare global {
   interface Window {
@@ -48,26 +49,36 @@ function loadPayPalSdk(clientId: string): Promise<NonNullable<Window["paypal"]>>
 }
 
 export function PayPalButtonSlot({
+  paymentMode = "paypal_sandbox",
   clientId,
   configured,
   taskId,
   amountFormatted,
+  existingOrderId,
   onSuccess,
   onStatusMessage,
 }: {
+  paymentMode?: PaymentMode;
   clientId: string | null;
   configured: boolean;
   taskId: string;
   amountFormatted: string;
+  existingOrderId?: string | null;
   onSuccess: () => void;
   onStatusMessage?: (msg: string, ok: boolean) => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [phase, setPhase] = useState<"loading" | "ready" | "authorizing" | "error">("loading");
   const [message, setMessage] = useState("");
+  const [simIntentId, setSimIntentId] = useState<string | null>(existingOrderId || null);
+  const [simBusy, setSimBusy] = useState(false);
 
   useEffect(() => {
-    if (!configured || !clientId) return;
+    setSimIntentId(existingOrderId || null);
+  }, [existingOrderId]);
+
+  useEffect(() => {
+    if (paymentMode === "simulation" || !configured || !clientId) return;
     let active = true;
     let buttonsInstance: { close?: () => Promise<void> } | null = null;
 
@@ -143,7 +154,118 @@ export function PayPalButtonSlot({
       active = false;
       buttonsInstance?.close?.().catch(() => null);
     };
-  }, [configured, clientId, taskId, amountFormatted, onSuccess, onStatusMessage]);
+  }, [paymentMode, configured, clientId, taskId, amountFormatted, onSuccess, onStatusMessage]);
+
+  async function handleSimCreateIntent() {
+    setSimBusy(true);
+    setMessage("");
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/create-order`, { method: "POST" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.orderId) {
+        throw new Error(json.error || "Could not create simulated payment intent.");
+      }
+      setSimIntentId(String(json.orderId));
+      setMessage(`Simulated intent ${json.orderId} ready for buyer approval below.`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Simulation intent failed";
+      setMessage(msg);
+      onStatusMessage?.(msg, false);
+    } finally {
+      setSimBusy(false);
+    }
+  }
+
+  async function handleSimApprove(simulateTimeout = false) {
+    setSimBusy(true);
+    setMessage("");
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/authorize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ simulateTimeout }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(json.error || "Simulated authorization failed");
+      }
+      const msg = `Simulated hold authorized (${amountFormatted} · ${json.authorizationId} · No money moved)`;
+      setMessage(msg);
+      onStatusMessage?.(msg, true);
+      onSuccess();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Simulated authorization error";
+      setMessage(msg);
+      onStatusMessage?.(msg, false);
+      onSuccess();
+    } finally {
+      setSimBusy(false);
+    }
+  }
+
+  if (paymentMode === "simulation") {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1.5 font-semibold text-[#17243A]">
+            <ShieldCheck className="h-4 w-4 text-blue-600" />
+            Simulated Checkout Flow · No money moved
+          </span>
+          <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+            Simulation Mode
+          </span>
+        </div>
+
+        {!simIntentId ? (
+          <div className="space-y-2.5">
+            <p className="text-slate-600 leading-relaxed">
+              Step 1 creates a task-scoped simulated intent ({amountFormatted}). Step 2 records your
+              simulated buyer approval and authorization hold in SQLite without contacting PayPal.
+            </p>
+            <Button
+              variant="primary"
+              size="md"
+              disabled={simBusy}
+              onClick={handleSimCreateIntent}
+            >
+              {simBusy ? "Creating Simulated Intent..." : `Create ${amountFormatted} Simulated Hold Intent`}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3 font-mono-code text-[11px] text-slate-700 space-y-1">
+              <p>Simulated Intent: {simIntentId}</p>
+              <p>Amount: {amountFormatted} USD · Status: BUYER_APPROVAL_PENDING</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="primary"
+                size="md"
+                disabled={simBusy}
+                onClick={() => handleSimApprove(false)}
+              >
+                {simBusy ? "Authorizing..." : `Approve ${amountFormatted} Hold (Simulation)`}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={simBusy}
+                onClick={() => handleSimApprove(true)}
+              >
+                Simulate Timeout (Test Reconcile)
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {message && (
+          <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] px-3 py-2 text-xs text-slate-700">
+            {message}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (!configured || !clientId) {
     return (
@@ -153,16 +275,16 @@ export function PayPalButtonSlot({
           <div>
             <p className="font-semibold">PayPal Sandbox Credentials Required</p>
             <p className="mt-1 text-amber-800">
-              Add <code>PAYPAL_CLIENT_ID</code>, <code>PAYPAL_CLIENT_SECRET</code>, and{" "}
-              <code>PAYPAL_MERCHANT_ID</code> to <code>.env.local</code> to render the live
-              PayPal Sandbox authorization flow for {amountFormatted}. PunchPay never
-              fabricates authorizations.
+              <code>PAYMENT_MODE=paypal_sandbox</code> is selected, so add{" "}
+              <code>PAYPAL_CLIENT_ID</code>, <code>PAYPAL_CLIENT_SECRET</code>, and{" "}
+              <code>PAYPAL_MERCHANT_ID</code> to <code>.env.local</code> (or unset{" "}
+              <code>PAYMENT_MODE</code> / set <code>PAYMENT_MODE=simulation</code> for offline testing).
             </p>
           </div>
         </div>
         <Link href="/settings">
           <Button size="sm" variant="outline" className="mt-1">
-            View PayPal Setup Guide
+            View Setup Guide
           </Button>
         </Link>
       </div>

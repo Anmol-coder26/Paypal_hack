@@ -4,10 +4,10 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  AlertTriangle,
   Bell,
   Briefcase,
   CheckCircle2,
+  Cpu,
   CreditCard,
   FileSearch,
   FlaskConical,
@@ -49,25 +49,28 @@ export function AppShell({
   const [localSearch, setLocalSearch] = useState("");
   const [switching, setSwitching] = useState(false);
 
-  const navItems =
+  const primaryNav =
     user.role === "homeowner"
       ? [
           { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-          { href: "/projects/new", label: "Create Project", icon: FolderKanban },
-          { href: "/payments", label: "Payment Control", icon: CreditCard },
           { href: "/reviews", label: "Evidence Reviews", icon: FileSearch },
+          { href: "/payments", label: "Payment Control", icon: CreditCard },
           { href: "/ledger", label: "Settlement Ledger", icon: ReceiptText },
-          { href: "/playground", label: "PayPal Fault Lab", icon: FlaskConical },
-          { href: "/settings", label: "Settings & Demo", icon: Settings },
         ]
       : [
           { href: "/contractor", label: "Contractor Desk", icon: Hammer },
           { href: "/reviews", label: "Evidence Reviews", icon: FileSearch },
-          { href: "/payments", label: "Payment Status", icon: CreditCard },
+          { href: "/payments", label: "Payment Control", icon: CreditCard },
           { href: "/ledger", label: "Settlement Ledger", icon: ReceiptText },
-          { href: "/playground", label: "PayPal Fault Lab", icon: FlaskConical },
-          { href: "/settings", label: "Settings & Demo", icon: Settings },
         ];
+
+  const utilityNav = [
+    ...(user.role === "homeowner"
+      ? [{ href: "/projects/new", label: "New Project", icon: FolderKanban }]
+      : []),
+    { href: "/playground", label: "Fault Lab", icon: FlaskConical },
+    { href: "/settings", label: "Settings", icon: Settings },
+  ];
 
   const notifications = projects.flatMap((p) =>
     p.tasks
@@ -87,7 +90,7 @@ export function AppShell({
         text:
           user.role === "homeowner"
             ? t.latest_review
-              ? `AI inspection complete (${t.latest_review.structured_findings.overall_assessment.replaceAll("_", " ")}) — awaiting your decision`
+              ? `Inspection complete (${t.latest_review.structured_findings.overall_assessment.replaceAll("_", " ")}) — awaiting decision`
               : "Contractor submitted before/after evidence"
             : t.work_status === "CORRECTIONS_REQUESTED"
             ? `Corrections requested: ${t.homeowner_feedback || "Check feedback"}`
@@ -118,11 +121,13 @@ export function AppShell({
     }
   }
 
+  const isSimMode = config.payment?.mode === "simulation";
+
   const SidebarContent = (
-    <div className="flex h-full flex-col bg-[#0b1324] text-slate-200">
+    <div className="flex h-full flex-col bg-[#17243A] text-slate-200">
       <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
         <Link href="/" className="flex items-center gap-2.5 text-white">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#2563EB] text-white">
             <ShieldCheck className="h-4.5 w-4.5" />
           </span>
           <div>
@@ -147,15 +152,15 @@ export function AppShell({
           </p>
           <div className="mt-0.5 flex items-center justify-between gap-2">
             <span className="text-xs font-medium capitalize text-white">{user.role}</span>
-            <span className="rounded bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-300">
-              Sandbox
+            <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-slate-200">
+              {isSimMode ? "Simulation" : "Sandbox"}
             </span>
           </div>
         </div>
       </div>
 
       <nav className="flex-1 space-y-1 px-3 py-2" aria-label="Primary Navigation">
-        {navItems.map((item) => {
+        {primaryNav.map((item) => {
           const Icon = item.icon;
           const active =
             pathname === item.href ||
@@ -170,11 +175,37 @@ export function AppShell({
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                 active
-                  ? "bg-blue-600 text-white shadow-xs"
+                  ? "bg-[#2563EB] text-white"
                   : "text-slate-300 hover:bg-white/8 hover:text-white"
               )}
             >
               <Icon className="h-4 w-4 shrink-0" />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+
+        <div className="pt-4 pb-1 px-3">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            Workspace Tools
+          </span>
+        </div>
+        {utilityNav.map((item) => {
+          const Icon = item.icon;
+          const active = pathname === item.href || pathname.startsWith(item.href);
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={() => setMobileOpen(false)}
+              className={cn(
+                "flex items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition-colors",
+                active
+                  ? "bg-[#2563EB] text-white"
+                  : "text-slate-300 hover:bg-white/8 hover:text-white"
+              )}
+            >
+              <Icon className="h-3.5 w-3.5 shrink-0" />
               <span>{item.label}</span>
             </Link>
           );
@@ -189,7 +220,7 @@ export function AppShell({
             onClick={handleDemoRoleSwitch}
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-white/10 transition-colors cursor-pointer"
           >
-            <Briefcase className="h-3.5 w-3.5 text-blue-400" />
+            <Briefcase className="h-3.5 w-3.5 text-blue-300" />
             {switching
               ? "Switching session..."
               : `Switch to Demo ${user.role === "homeowner" ? "Contractor" : "Homeowner"}`}
@@ -215,7 +246,7 @@ export function AppShell({
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
+    <div className="min-h-screen bg-[#F7F8FA] flex">
       {/* Desktop sidebar */}
       <aside className="hidden lg:block lg:w-64 lg:shrink-0 sticky top-0 h-screen">
         {SidebarContent}
@@ -225,7 +256,7 @@ export function AppShell({
       {mobileOpen && (
         <div className="fixed inset-0 z-50 flex lg:hidden">
           <div
-            className="fixed inset-0 bg-slate-950/60"
+            className="fixed inset-0 bg-[#17243A]/60"
             onClick={() => setMobileOpen(false)}
           />
           <div className="relative z-10 w-64 h-full">{SidebarContent}</div>
@@ -246,15 +277,15 @@ export function AppShell({
                 <Menu className="h-4 w-4" />
               </button>
               <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500">
-                <span className="font-semibold text-slate-800">Workspace</span>
+                <span className="font-semibold text-[#17243A]">PunchPay</span>
                 <span>/</span>
-                <span className="capitalize">{user.role} Console</span>
+                <span className="capitalize">{user.role} Workspace</span>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 sm:gap-2.5">
               {onSearchChange ? (
-                <div className="relative hidden md:block w-64">
+                <div className="relative hidden md:block w-60">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
                   <input
                     type="search"
@@ -264,29 +295,58 @@ export function AppShell({
                       onSearchChange(e.target.value);
                     }}
                     placeholder="Search projects or IDs..."
-                    className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none"
+                    className="h-8 w-full rounded-lg border border-slate-200 bg-[#F7F8FA] pl-8 pr-3 text-xs text-[#17243A] placeholder:text-slate-400 focus:border-[#2563EB] focus:bg-white focus:outline-none"
                   />
                 </div>
               ) : null}
 
+              {/* Restrained Environment Mode Pill */}
               <Link
                 href="/settings"
                 className={cn(
-                  "hidden sm:inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
-                  config.paypal.configured && config.ai.configured
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                    : "border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  isSimMode
+                    ? "border-slate-300 bg-[#F7F8FA] text-slate-700 hover:bg-slate-100"
+                    : "border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100"
                 )}
               >
-                {config.paypal.configured && config.ai.configured ? (
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full",
+                    isSimMode ? "bg-amber-600" : "bg-[#2563EB]"
+                  )}
+                />
+                <span>
+                  {config.payment?.label ||
+                    (isSimMode
+                      ? "Simulation · No money moved"
+                      : "PayPal Sandbox · Test transactions")}
+                </span>
+              </Link>
+
+              {/* AI Mode Badge */}
+              <Link
+                href="/settings"
+                className={cn(
+                  "hidden md:inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  config.ai.configured
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                )}
+              >
+                {config.ai.configured ? (
                   <>
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    PayPal Sandbox + AI Live
+                    <CheckCircle2 className="h-3 w-3" />
+                    <span>
+                      {config.ai.provider === "ollama"
+                        ? `Ollama · ${config.ai.model}`
+                        : `${config.ai.provider} · ${config.ai.model}`}
+                    </span>
                   </>
                 ) : (
                   <>
-                    <AlertTriangle className="h-3.5 w-3.5" />
-                    Setup Required
+                    <Cpu className="h-3 w-3 text-slate-400" />
+                    <span>AI: Manual Checklist</span>
                   </>
                 )}
               </Link>
@@ -300,7 +360,7 @@ export function AppShell({
                 >
                   <Bell className="h-4 w-4" />
                   {notifications.length > 0 && (
-                    <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-600 text-[10px] font-semibold text-white">
+                    <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#2563EB] text-[10px] font-semibold text-white">
                       {notifications.length}
                     </span>
                   )}
@@ -308,7 +368,7 @@ export function AppShell({
                 {notifOpen && (
                   <div className="absolute right-0 mt-2 w-80 rounded-xl border border-slate-200 bg-white p-3 shadow-xl z-40">
                     <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                      <span className="text-xs font-semibold text-slate-900">
+                      <span className="text-xs font-semibold text-[#17243A]">
                         Action Notifications
                       </span>
                       <button
@@ -332,7 +392,7 @@ export function AppShell({
                               onClick={() => setNotifOpen(false)}
                               className="block rounded-lg p-2 hover:bg-slate-50"
                             >
-                              <p className="text-xs font-medium text-slate-900">
+                              <p className="text-xs font-medium text-[#17243A]">
                                 {n.title} · <span className="text-slate-500">{n.projectTitle}</span>
                               </p>
                               <p className="mt-0.5 text-[11px] text-slate-600">{n.text}</p>
@@ -346,28 +406,6 @@ export function AppShell({
               </div>
             </div>
           </div>
-
-          {(!config.paypal.configured || !config.ai.configured) && (
-            <div className="border-t border-amber-200/80 bg-amber-50/90 px-4 py-2 text-xs text-amber-900 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
-                <span>
-                  <strong>Integration status:</strong>{" "}
-                  {!config.paypal.configured && "PayPal Sandbox not configured"}
-                  {!config.paypal.configured && !config.ai.configured && " · "}
-                  {!config.ai.configured && "AI Vision key (Gemini or Anthropic) not configured"}
-                  {" · "}
-                  Database active ({config.database.driver.toUpperCase()}). Real financial &amp; AI calls require credentials in <code>.env.local</code>.
-                </span>
-              </div>
-              <Link
-                href="/settings"
-                className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950"
-              >
-                View setup instructions
-              </Link>
-            </div>
-          )}
         </header>
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">

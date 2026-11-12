@@ -52,7 +52,7 @@ export default function PaymentControlPage() {
       const res = await fetch(`/api/tasks/${taskId}/reconcile`, { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Reconcile failed");
-      setToast({ text: json.message || "Reconciled with PayPal", ok: true });
+      setToast({ text: json.message || "Reconciled status", ok: true });
       await load();
     } catch (err) {
       setToast({
@@ -66,7 +66,7 @@ export default function PaymentControlPage() {
 
   if (loading || !user || !config) {
     return (
-      <div className="min-h-screen bg-slate-50 p-8 max-w-6xl mx-auto space-y-4">
+      <div className="min-h-screen bg-[#F7F8FA] p-8 max-w-6xl mx-auto space-y-4">
         <Skeleton className="h-10 w-64" />
         <Skeleton className="h-64 w-full" />
       </div>
@@ -82,12 +82,11 @@ export default function PaymentControlPage() {
       <div className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">
-              PayPal Payment Control Center
+            <h1 className="text-2xl font-bold text-[#17243A]">
+              Payment Control
             </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              Manage individual PayPal Orders v2 authorizations, expiration windows, and
-              GET-verified status reconciliation.
+            <p className="mt-1 text-sm text-slate-600">
+              Task-scoped authorization holds, settlement provenance, and status reconciliation.
             </p>
           </div>
           <Button variant="outline" onClick={load}>
@@ -100,7 +99,7 @@ export default function PaymentControlPage() {
           <div
             className={`rounded-xl border px-4 py-3 text-xs ${
               toast.ok
-                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-900"
                 : "border-red-200 bg-red-50 text-red-700"
             }`}
           >
@@ -111,15 +110,20 @@ export default function PaymentControlPage() {
         {allItems.length === 0 ? (
           <Card className="p-8 text-center space-y-3">
             <CreditCard className="h-8 w-8 text-slate-400 mx-auto" />
-            <p className="text-sm font-semibold text-slate-900">No repair tasks yet</p>
+            <p className="text-sm font-semibold text-[#17243A]">No repair tasks yet</p>
             <p className="text-xs text-slate-500">
-              Create a project to generate individual PayPal authorization holds per repair.
+              Create a project to generate individual task authorization holds.
             </p>
           </Card>
         ) : (
           <div className="space-y-5">
             {allItems.map(({ project, task }) => {
               const p = task.payment;
+              const isSim = p.payment_mode === "simulation";
+              const orderRef = isSim ? p.sim_intent_id : p.paypal_order_id;
+              const authRef = isSim ? p.sim_authorization_id : p.paypal_authorization_id;
+              const capRef = isSim ? p.sim_capture_id : p.paypal_capture_id;
+              const providerStatus = isSim ? p.sim_status : p.paypal_status;
               const canFund =
                 user.role === "homeowner" &&
                 ["DRAFT", "ORDER_CREATED", "BUYER_APPROVAL_PENDING", "PAYMENT_FAILED"].includes(
@@ -132,62 +136,77 @@ export default function PaymentControlPage() {
                       <p className="text-xs font-medium text-slate-500">
                         {project.title} · {project.location}
                       </p>
-                      <h2 className="text-lg font-bold text-slate-900 mt-0.5">
+                      <h2 className="text-lg font-bold text-[#17243A] mt-0.5">
                         {task.title}
                       </h2>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <PaymentStatusBadge status={p.payment_status} />
-                        {p.paypal_status && (
+                        <span
+                          className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${
+                            isSim
+                              ? "border-slate-300 bg-[#F7F8FA] text-slate-700"
+                              : "border-blue-200 bg-blue-50 text-blue-800"
+                          }`}
+                        >
+                          {isSim ? "Simulation · No money moved" : "PayPal Sandbox"}
+                        </span>
+                        {providerStatus && (
                           <span className="rounded bg-slate-100 px-2 py-0.5 font-mono-code text-[11px] text-slate-700">
-                            PayPal: {p.paypal_status}
+                            Status: {providerStatus}
                           </span>
                         )}
                       </div>
                     </div>
 
                     <div className="text-right">
-                      <p className="font-mono-code text-2xl font-bold text-slate-900 tabular-nums">
+                      <p className="font-mono-code text-2xl font-bold text-[#17243A] tabular-nums">
                         {formatMoney(p.amount_minor_units, p.currency)}
                       </p>
-                      <p className="text-xs text-slate-500">{p.currency} · Sandbox</p>
+                      <p className="text-xs text-slate-500">
+                        {p.currency} · {isSim ? "Local Simulation" : "PayPal Sandbox"}
+                      </p>
                     </div>
                   </div>
 
                   <PaymentLifecycleTimeline payment={p} />
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs">
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                      <p className="text-slate-500">PayPal Order ID</p>
-                      <p className="mt-1 font-mono-code font-medium text-slate-900 break-all">
-                        {p.paypal_order_id || "—"}
+                    <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
+                      <p className="text-slate-500">{isSim ? "Sim Intent ID" : "PayPal Order ID"}</p>
+                      <p className="mt-1 font-mono-code font-medium text-[#17243A] break-all">
+                        {orderRef || "—"}
                       </p>
                     </div>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                      <p className="text-slate-500">Authorization ID</p>
-                      <p className="mt-1 font-mono-code font-medium text-slate-900 break-all">
-                        {p.paypal_authorization_id || "—"}
+                    <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
+                      <p className="text-slate-500">{isSim ? "Sim Auth ID" : "Authorization ID"}</p>
+                      <p className="mt-1 font-mono-code font-medium text-[#17243A] break-all">
+                        {authRef || "—"}
                       </p>
                     </div>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                      <p className="text-slate-500">Capture ID</p>
-                      <p className="mt-1 font-mono-code font-medium text-slate-900 break-all">
-                        {p.paypal_capture_id || "—"}
+                    <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
+                      <p className="text-slate-500">{isSim ? "Sim Capture ID" : "Capture ID"}</p>
+                      <p className="mt-1 font-mono-code font-medium text-[#17243A] break-all">
+                        {capRef || "—"}
                       </p>
                     </div>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3">
                       <p className="text-slate-500">Authorization Created</p>
-                      <p className="mt-1 font-medium text-slate-900">
+                      <p className="mt-1 font-medium text-[#17243A]">
                         {formatDateTime(p.authorization_created_at)}
                       </p>
                     </div>
                   </div>
 
                   {canFund && (
-                    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-2">
-                      <p className="text-xs font-semibold text-slate-800">
-                        Approve PayPal Sandbox Authorization ({formatMoney(p.amount_minor_units)})
+                    <div className="rounded-xl border border-slate-200 bg-[#F7F8FA] p-4 space-y-2">
+                      <p className="text-xs font-semibold text-[#17243A]">
+                        {isSim
+                          ? `Simulated Hold Authorization (${formatMoney(p.amount_minor_units)})`
+                          : `Approve PayPal Sandbox Authorization (${formatMoney(p.amount_minor_units)})`}
                       </p>
                       <PayPalButtonSlot
+                        paymentMode={p.payment_mode || config.payment.mode}
+                        existingOrderId={orderRef}
                         clientId={config.paypal.clientId}
                         configured={config.paypal.configured}
                         taskId={task.id}
@@ -202,13 +221,13 @@ export default function PaymentControlPage() {
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={busyId === task.id || (!p.paypal_order_id && !p.paypal_authorization_id)}
+                      disabled={busyId === task.id || (!orderRef && !authRef)}
                       onClick={() => reconcile(task.id)}
                     >
                       <RefreshCw
                         className={`h-3.5 w-3.5 ${busyId === task.id ? "animate-spin" : ""}`}
                       />
-                      Reconcile PayPal Status (GET)
+                      Reconcile Status
                     </Button>
                     <Link href={`/tasks/${task.id}`}>
                       <Button size="sm" variant="primary">

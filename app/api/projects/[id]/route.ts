@@ -4,6 +4,7 @@ import { getRepo } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { responseError } from "@/lib/http";
 import { assertCanAccessProject } from "@/lib/payments/service";
+import { getConfiguredPaymentMode } from "@/lib/payments/simulator";
 
 const AddTaskSchema = z.object({
   title: z.string().min(2).max(120),
@@ -46,7 +47,7 @@ export async function POST(
         { status: 400 }
       );
     }
-    const task = await getRepo().addTask(id, parsed.data);
+    const task = await getRepo().addTask(id, parsed.data, getConfiguredPaymentMode());
     return Response.json({ task }, { status: 201 });
   } catch (err) {
     return responseError(err);

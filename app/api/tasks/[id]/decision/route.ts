@@ -6,6 +6,7 @@ import { executeHomeownerDecision } from "@/lib/payments/service";
 const DecisionSchema = z.object({
   decision: z.enum(["accept", "reject", "request_corrections", "request_evidence"]),
   reason: z.string().max(1000).default(""),
+  simulateTimeout: z.boolean().optional(),
 });
 
 export async function POST(

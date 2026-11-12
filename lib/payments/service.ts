@@ -2,6 +2,7 @@ import { getRepo } from "../db";
 import { HttpError } from "../errors";
 import type {
   DecisionAction,
+  PaymentMode,
   PaymentStatus,
   Profile,
   TaskBundle,
@@ -13,10 +14,35 @@ import {
   createPayPalSandboxClient,
   getPayPalClientConfig,
 } from "./paypal-client";
+import {
+  getConfiguredPaymentMode,
+  simAuthorizeTask,
+  simCreateIntentForTask,
+  simExecuteSettlement,
+  simReconcileTask,
+} from "./simulator";
 import { mapCaptureStatusToPaymentStatus } from "./state-machine";
 
 const REUSABLE_ORDER_STATUSES = ["CREATED", "PAYER_ACTION_REQUIRED", "APPROVED", "SAVED"];
 const HOLD_ENDED_STATUSES = ["EXPIRED", "DENIED", "VOIDED"];
+
+function shouldUseSimulation(
+  payment: {
+    payment_mode?: PaymentMode;
+    paypal_order_id?: string | null;
+    sim_intent_id?: string | null;
+    payment_status: PaymentStatus;
+  },
+  paypalOverride?: PayPalSandboxClient
+): boolean {
+  if (paypalOverride) return false;
+  if (payment.paypal_order_id) return false;
+  if (payment.sim_intent_id || payment.payment_mode === "simulation") return true;
+  if (payment.payment_status === "DRAFT") {
+    return getConfiguredPaymentMode() === "simulation";
+  }
+  return false;
+}
 
 function requirePayPalClient(overrideClient?: PayPalSandboxClient): PayPalSandboxClient {
   if (overrideClient) return overrideClient;
@@ -84,9 +110,13 @@ export async function createOrderForTask(
   paypalOverride?: PayPalSandboxClient
 ) {
   const repo = getRepo();
-  const pp = requirePayPalClient(paypalOverride);
   const { project, task } = await assertTaskOwner(taskId, user, "homeowner");
   const payment = task.payment;
+
+  if (shouldUseSimulation(payment, paypalOverride)) {
+    return simCreateIntentForTask(task, project);
+  }
+  const pp = requirePayPalClient(paypalOverride);
 
   if (
     (payment.payment_status === "ORDER_CREATED" ||
@@ -101,7 +131,7 @@ export async function createOrderForTask(
           minorUnits: task.amount_minor_units,
           merchantId: pp.merchantId,
         });
-        return { orderId: existing.id, status: existing.status, reused: true };
+        return { mode: "paypal_sandbox" as const, orderId: existing.id, status: existing.status, reused: true };
       }
       if (existing.status === "COMPLETED") {
         const auth = existing.purchase_units?.[0]?.payments?.authorizations?.[0];
@@ -158,6 +188,7 @@ export async function createOrderForTask(
   });
 
   await repo.claimPaymentState(fresh.id, ["DRAFT", "PAYMENT_FAILED"], "BUYER_APPROVAL_PENDING", {
+    payment_mode: "paypal_sandbox",
     paypal_order_id: order.id,
     paypal_status: order.status,
     payee_merchant_id: payee,
@@ -177,18 +208,23 @@ export async function createOrderForTask(
     },
   });
 
-  return { orderId: order.id, status: order.status, reused: false };
+  return { mode: "paypal_sandbox" as const, orderId: order.id, status: order.status, reused: false };
 }
 
 export async function authorizeOrderForTask(
   taskId: string,
   user: Profile,
-  paypalOverride?: PayPalSandboxClient
+  paypalOverride?: PayPalSandboxClient,
+  opts?: { simulateTimeout?: boolean }
 ) {
   const repo = getRepo();
-  const pp = requirePayPalClient(paypalOverride);
-  const { task } = await assertTaskOwner(taskId, user, "homeowner");
+  const { project, task } = await assertTaskOwner(taskId, user, "homeowner");
   const payment = task.payment;
+
+  if (shouldUseSimulation(payment, paypalOverride)) {
+    return simAuthorizeTask(task, project, opts);
+  }
+  const pp = requirePayPalClient(paypalOverride);
 
   if (payment.paypal_authorization_id && payment.payment_status !== "DRAFT") {
     return {
@@ -306,7 +342,7 @@ export async function authorizeOrderForTask(
 export async function executeHomeownerDecision(
   taskId: string,
   user: Profile,
-  input: { decision: DecisionAction; reason: string },
+  input: { decision: DecisionAction; reason: string; simulateTimeout?: boolean },
   paypalOverride?: PayPalSandboxClient
 ) {
   const repo = getRepo();
@@ -336,8 +372,22 @@ export async function executeHomeownerDecision(
     return {
       workStatus: "CORRECTIONS_REQUESTED",
       paymentStatus: payment.payment_status,
-      message: "Feedback sent to contractor. PayPal authorization hold remains untouched.",
+      message: "Feedback sent to contractor. Authorization hold remains untouched.",
     };
+  }
+
+  if (shouldUseSimulation(payment, paypalOverride)) {
+    return simExecuteSettlement(
+      task,
+      project,
+      user,
+      {
+        decision: input.decision,
+        reason: input.reason,
+        simulateTimeout: input.simulateTimeout,
+      },
+      maybeCompleteProject
+    );
   }
 
   // Settlement actions: accept (capture) or reject (void)
@@ -594,9 +644,13 @@ export async function reconcileTaskPayment(
   paypalOverride?: PayPalSandboxClient
 ) {
   const repo = getRepo();
-  const pp = requirePayPalClient(paypalOverride);
   const { project, task } = await assertTaskOwner(taskId, user);
   const payment = task.payment;
+
+  if (shouldUseSimulation(payment, paypalOverride)) {
+    return simReconcileTask(task, project, maybeCompleteProject);
+  }
+  const pp = requirePayPalClient(paypalOverride);
 
   if (
     ["ORDER_CREATED", "BUYER_APPROVAL_PENDING", "RECONCILIATION_REQUIRED"].includes(
@@ -990,7 +1044,10 @@ export async function assertCanAccessProject(projectId: string, user: Profile) {
 
 export function computeGuidedDemoStep(tasks: TaskBundle[]): number {
   if (tasks.length === 0) return 1;
-  const allAuthorizedOrSettled = tasks.every((t) => t.payment.paypal_authorization_id !== null);
+  const allAuthorizedOrSettled = tasks.every(
+    (t) =>
+      t.payment.paypal_authorization_id !== null || t.payment.sim_authorization_id !== null
+  );
   const allHaveBeforeAfter = tasks.every(
     (t) =>
       t.evidence.some((e) => e.evidence_type === "before") &&

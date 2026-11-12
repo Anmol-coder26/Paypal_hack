@@ -13,38 +13,44 @@ export function PaymentLifecycleTimeline({
   compact?: boolean;
 }) {
   const status = payment.payment_status;
+  const isSim = payment.payment_mode === "simulation";
+  const orderId = isSim ? payment.sim_intent_id : payment.paypal_order_id;
+  const authId = isSim ? payment.sim_authorization_id : payment.paypal_authorization_id;
+  const captureId = isSim ? payment.sim_capture_id : payment.paypal_capture_id;
   const isVoidPath = status === "VOID_PENDING" || status === "VOIDED";
 
-  const step1Done = Boolean(payment.paypal_order_id);
+  const step1Done = Boolean(orderId);
   const step2Done =
-    Boolean(payment.paypal_authorization_id) ||
+    Boolean(authId) ||
     ["AUTHORIZED", "CAPTURE_PENDING", "CAPTURED", "VOID_PENDING", "VOIDED"].includes(status);
-  const step3Done = Boolean(payment.paypal_authorization_id);
+  const step3Done = Boolean(authId);
   const step4Done = status === "CAPTURED" || status === "VOIDED";
   const step4Pending = status === "CAPTURE_PENDING" || status === "VOID_PENDING";
 
   const steps = [
     {
-      label: "Order Created",
-      sub: payment.paypal_order_id ? `Order ${payment.paypal_order_id}` : "Not started",
+      label: isSim ? "Intent Created" : "Order Created",
+      sub: orderId ? orderId : "Not started",
       done: step1Done,
       active: status === "ORDER_CREATED",
     },
     {
-      label: "Buyer Approved",
+      label: isSim ? "Sim Approved" : "Buyer Approved",
       sub: step2Done
-        ? "Approved in PayPal Sandbox"
+        ? isSim
+          ? "Approved (Simulation)"
+          : "Approved in PayPal Sandbox"
         : status === "BUYER_APPROVAL_PENDING"
-        ? "Waiting for buyer popup"
+        ? isSim
+          ? "Awaiting simulated approval"
+          : "Waiting for buyer popup"
         : "Pending",
       done: step2Done,
       active: status === "BUYER_APPROVAL_PENDING",
     },
     {
       label: "Authorized Hold",
-      sub: payment.paypal_authorization_id
-        ? `Auth ${payment.paypal_authorization_id}`
-        : "No hold yet",
+      sub: authId ? authId : "No hold yet",
       done: step3Done,
       active: status === "AUTHORIZED",
     },
@@ -52,11 +58,11 @@ export function PaymentLifecycleTimeline({
       label: isVoidPath ? "Voided" : "Captured",
       sub:
         status === "CAPTURED"
-          ? `Capture ${payment.paypal_capture_id || "COMPLETED"}`
+          ? captureId || "COMPLETED"
           : status === "VOIDED"
           ? "Hold released (VOIDED)"
           : step4Pending
-          ? "Waiting for PayPal confirmation"
+          ? "Pending confirmation"
           : "Awaiting homeowner decision",
       done: step4Done,
       active: step4Pending,
@@ -71,7 +77,9 @@ export function PaymentLifecycleTimeline({
           <div
             key={s.label}
             className={cn(
-              compact ? "rounded-lg border px-2.5 py-2 transition-colors" : "rounded-xl border p-3 transition-colors",
+              compact
+                ? "rounded-lg border px-2.5 py-2 transition-colors"
+                : "rounded-xl border p-3 transition-colors",
               s.done
                 ? s.tone === "neutral"
                   ? "border-slate-300 bg-slate-100"
@@ -88,7 +96,7 @@ export function PaymentLifecycleTimeline({
                   s.done
                     ? s.tone === "neutral"
                       ? "bg-slate-700 text-white"
-                      : "bg-emerald-600 text-white"
+                      : "bg-emerald-700 text-white"
                     : s.active
                     ? "bg-blue-600 text-white"
                     : "bg-slate-200 text-slate-600"
@@ -96,7 +104,9 @@ export function PaymentLifecycleTimeline({
               >
                 {s.done ? <Check className="h-2.5 w-2.5" /> : idx + 1}
               </span>
-              <span className="text-[11px] font-semibold text-slate-900 leading-tight">{s.label}</span>
+              <span className="text-[11px] font-semibold text-[#17243A] leading-tight">
+                {s.label}
+              </span>
             </div>
             {!compact && (
               <p className="mt-1.5 truncate font-mono-code text-[11px] text-slate-600" title={s.sub}>
@@ -108,11 +118,12 @@ export function PaymentLifecycleTimeline({
       </div>
 
       {!compact && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-[#F7F8FA] px-3 py-2 text-[11px] text-slate-600">
           <span className="inline-flex items-center gap-1.5">
             <Clock className="h-3.5 w-3.5 text-slate-400" />
-            PayPal authorizations are temporary holds (up to 29 days, 3-day honor period) — not
-            escrow or guaranteed future funds.
+            {isSim
+              ? "Simulation · No money moved. Mirrors PayPal's authorization → capture/void rules locally."
+              : "PayPal Sandbox authorizations are temporary holds (up to 29 days, 3-day honor period) — not escrow."}
           </span>
           {payment.authorization_expires_at && (
             <span className="font-mono-code text-slate-700">

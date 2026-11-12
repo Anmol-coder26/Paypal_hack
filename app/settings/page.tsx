@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle2, Database, Sparkles } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Cpu, CreditCard, Database, Sparkles } from "lucide-react";
 import { AppShell } from "@/components/shell/AppShell";
 import { Button, Card, Skeleton } from "@/components/ui/primitives";
 import type { Profile, SystemConfigStatus } from "@/lib/types";
@@ -49,23 +49,24 @@ export default function SettingsPage() {
 
   if (loading || !user || !config) {
     return (
-      <div className="min-h-screen bg-slate-50 p-8 max-w-4xl mx-auto space-y-4">
+      <div className="min-h-screen bg-[#F7F8FA] p-8 max-w-4xl mx-auto space-y-4">
         <Skeleton className="h-10 w-64" />
         <Skeleton className="h-64 w-full" />
       </div>
     );
   }
 
+  const ollama = config.ai.ollama;
+
   return (
     <AppShell user={user} config={config}>
       <div className="max-w-4xl space-y-6">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            Settings &amp; Sandbox Diagnostics
+          <h1 className="text-2xl font-bold text-[#17243A]">
+            Settings &amp; Environment Diagnostics
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Live status of database persistence, PayPal Sandbox API credentials, webhooks,
-            and AI Vision provider configuration.
+            Active payment mode, local Ollama / cloud AI vision readiness, and database driver.
           </p>
         </div>
 
@@ -75,96 +76,106 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <Card className="p-5 space-y-2">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <Card className="p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-700">Payment Mode</span>
+              <CreditCard className="h-4 w-4 text-blue-600" />
+            </div>
+            <p className="text-sm font-bold text-[#17243A]">
+              {config.payment.mode === "simulation" ? "Simulation Mode" : "PayPal Sandbox"}
+            </p>
+            <p className="text-xs text-slate-500">{config.payment.label}</p>
+          </Card>
+
+          <Card className="p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-700">PayPal API Keys</span>
+              {config.paypal.configured ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+              )}
+            </div>
+            <p className="text-sm font-bold text-[#17243A]">
+              {config.paypal.configured ? "Configured" : "Not Configured"}
+            </p>
+            <p className="text-xs text-slate-500">
+              Webhook: {config.paypal.webhookConfigured ? "Configured" : "Pending"}
+            </p>
+          </Card>
+
+          <Card className="p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-700">AI Vision</span>
+              {config.ai.configured ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+              ) : (
+                <Cpu className="h-4 w-4 text-amber-600" />
+              )}
+            </div>
+            <p className="text-sm font-bold text-[#17243A]">
+              {config.ai.configured
+                ? `${config.ai.provider} (${config.ai.model})`
+                : "Manual Checklist"}
+            </p>
+            <p className="text-xs text-slate-500">
+              {ollama?.error
+                ? ollama.error
+                : config.ai.configured
+                ? "Active vision model ready for image inspection."
+                : "Start Ollama (qwen2.5vl:3b) or set Gemini/Claude key."}
+            </p>
+          </Card>
+
+          <Card className="p-4 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-700">Database</span>
-              <Database className="h-4 w-4 text-emerald-600" />
+              <Database className="h-4 w-4 text-emerald-700" />
             </div>
-            <p className="text-sm font-bold text-slate-900 uppercase">
+            <p className="text-sm font-bold text-[#17243A] uppercase">
               {config.database.driver}
             </p>
             <p className="text-xs text-slate-500">
               {config.database.driver === "supabase"
-                ? "Connected to Supabase PostgreSQL + private Storage"
-                : "Active local SQLite (.data/punchpay.db) + private local image storage"}
-            </p>
-          </Card>
-
-          <Card className="p-5 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-700">PayPal Sandbox</span>
-              {config.paypal.configured ? (
-                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-              ) : (
-                <AlertTriangle className="h-4 w-4 text-amber-600" />
-              )}
-            </div>
-            <p className="text-sm font-bold text-slate-900">
-              {config.paypal.configured ? "Configured" : "Not Configured"}
-            </p>
-            <p className="text-xs text-slate-500">
-              Webhook: {config.paypal.webhookConfigured ? "Configured" : "Pending"} · Host:{" "}
-              <code>api-m.sandbox.paypal.com</code>
-            </p>
-          </Card>
-
-          <Card className="p-5 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-700">AI Vision</span>
-              {config.ai.configured ? (
-                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-              ) : (
-                <AlertTriangle className="h-4 w-4 text-amber-600" />
-              )}
-            </div>
-            <p className="text-sm font-bold text-slate-900">
-              {config.ai.configured
-                ? `${config.ai.provider} (${config.ai.model})`
-                : "Not Configured"}
-            </p>
-            <p className="text-xs text-slate-500">
-              Supports Google Gemini or Anthropic Claude multimodal JSON inspection.
+                ? "Supabase Postgres + Private Storage"
+                : "Local SQLite (.data/punchpay.db)"}
             </p>
           </Card>
         </div>
 
         <Card className="p-6 space-y-4">
-          <h2 className="text-base font-semibold text-slate-900">
-            Environment Variables (<code>.env.local</code>)
+          <h2 className="text-base font-semibold text-[#17243A]">
+            Local Configuration (<code>.env.local</code>)
           </h2>
-          <pre className="overflow-x-auto rounded-xl bg-slate-950 p-4 font-mono-code text-xs text-slate-200 leading-relaxed">
-{`# PayPal Sandbox (Business Merchant + Personal Payer)
+          <pre className="overflow-x-auto rounded-xl bg-[#17243A] p-4 font-mono-code text-xs text-slate-100 leading-relaxed">
+{`# Payment Mode: 'simulation' (no money moved) or 'paypal_sandbox'
+PAYMENT_MODE=simulation
+
+# Local Ollama Vision AI (requires >= 6-8 GB free RAM & ~3.2 GB disk for qwen2.5vl:3b)
+AI_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5vl:3b
+
+# Optional Real PayPal Sandbox Credentials
 PAYPAL_CLIENT_ID=your_sandbox_rest_client_id
 PAYPAL_CLIENT_SECRET=your_sandbox_rest_secret
 NEXT_PUBLIC_PAYPAL_CLIENT_ID=your_sandbox_rest_client_id
-PAYPAL_MERCHANT_ID=contractor_sandbox_merchant_id
-PAYPAL_WEBHOOK_ID=sandbox_webhook_id   # Endpoint: /api/webhooks/paypal
+PAYPAL_MERCHANT_ID=your_sandbox_business_merchant_id
+PAYPAL_WEBHOOK_ID=optional_sandbox_webhook_id
 
-# App Origin & Session Security
+# Application Session
 NEXT_PUBLIC_APP_URL=http://localhost:3000
-SESSION_SECRET=replace_with_32_byte_random_hex
-
-# Multimodal AI Vision (set either Gemini OR Anthropic)
-GEMINI_API_KEY=your_gemini_api_key
-# ANTHROPIC_API_KEY=your_anthropic_api_key
-
-# Optional Supabase (omit locally for SQLite; required for Vercel deploy)
-# NEXT_PUBLIC_SUPABASE_URL=
-# NEXT_PUBLIC_SUPABASE_ANON_KEY=
-# SUPABASE_URL=
-# SUPABASE_SERVICE_ROLE_KEY=`}
+SESSION_SECRET=64_hex_char_random_secret`}
           </pre>
-
           {user.role === "homeowner" && (
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
               <p className="text-xs text-slate-600">
-                Create the 3-minute hackathon Guided Demo project ($30 Painting + $20 Tile
-                Repair).
+                Launch the guided Kitchen Renovation Closeout project ($30 Painting + $20 Tile Repair).
               </p>
               <Button variant="primary" onClick={launchDemo} disabled={creatingDemo}>
                 <Sparkles className="h-4 w-4" />
-                {creatingDemo ? "Creating..." : "Create Guided Demo Project"}
+                {creatingDemo ? "Launching..." : "Continue Guided Demo ($50)"}
               </Button>
             </div>
           )}

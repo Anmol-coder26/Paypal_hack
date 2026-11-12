@@ -9,7 +9,7 @@ test.beforeAll(() => {
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 });
 
-test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persistence, accessibility, and responsive layouts", async ({
+test("full PunchPay 2.1 end-to-end workflow across simulation settlement, evidence inspection, Q&A, persistence, and responsive layouts", async ({
   page,
 }, testInfo) => {
   const consoleErrors: string[] = [];
@@ -38,7 +38,7 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
     });
   }
 
-  // Check zero horizontal overflow
+  // Zero horizontal overflow
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth
   );
@@ -48,7 +48,8 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
   await page.goto("/login");
   await page.getByRole("button", { name: /Demo Homeowner/i }).click();
   await page.waitForURL("**/dashboard");
-  await expect(page.getByRole("heading", { name: "Homeowner Command Center" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+  await expect(page.getByText(/Simulation · No money moved/i).first()).toBeVisible();
 
   // 3. Create custom multi-step project via Wizard
   await page.goto("/projects/new");
@@ -71,13 +72,115 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
   await expect(page.getByRole("heading", { name: "Maple Ave Verification" })).toBeVisible();
   await expect(page.getByText("Drywall Patch")).toBeVisible();
 
-  // 4. Launch 1-Click Guided Demo ($30 Painting + $20 Tile Repair)
+  // 4. Launch 1-Click Guided Demo (Kitchen Renovation Closeout · $30 Painting + $20 Tile Repair)
   await page.goto("/dashboard");
-  await page.getByRole("button", { name: /Guided Demo/i }).click();
+  await page.getByRole("button", { name: /Continue Guided Demo/i }).click();
   await page.waitForURL(/\/projects\/[0-9a-f-]{36}$/);
-  await expect(page.getByText("Oak Street Living & Kitchen Closeout")).toBeVisible();
+  const demoProjectUrl = page.url();
+  await expect(page.getByText("Kitchen Renovation Closeout").first()).toBeVisible();
   await expect(page.getByText("$50.00").first()).toBeVisible();
 
+  // 4b. Authorize both simulated holds via the interactive homeowner modal
+  await page.getByRole("button", { name: /Authorize \$30\.00/i }).click();
+  await page.getByRole("button", { name: /Create \$30\.00 Simulated Hold Intent/i }).click();
+  await page.getByRole("button", { name: /Approve \$30\.00 Hold/i }).click();
+  await expect(page.getByText(/SIM-AUTH-/i).first()).toBeVisible();
+
+  await page.getByRole("button", { name: /Authorize \$20\.00/i }).click();
+  await page.getByRole("button", { name: /Create \$20\.00 Simulated Hold Intent/i }).click();
+  await page.getByRole("button", { name: /Approve \$20\.00 Hold/i }).click();
+  await expect(page.getByText(/Payments Authorized/i)).toBeVisible();
+
+  // Verify Homeowner navigating directly to /contractor redirects cleanly back to /dashboard
+  await page.goto("/contractor");
+  await page.waitForURL("**/dashboard");
+
+  // 5. Switch to Demo Contractor, upload Sample Before+After on BOTH Painting and Tile Repair + Pin
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Demo Contractor/i }).click();
+  await page.waitForURL("**/contractor");
+  await expect(page.getByRole("heading", { name: "Contractor Workspace" })).toBeVisible();
+
+  // Upload Before + After for Painting (first task in guided demo)
+  await page.getByRole("button", { name: /Painting.*Kitchen Renovation Closeout/i }).first().click();
+  await page.getByRole("button", { name: "Load Sample Before" }).click();
+  await expect(page.getByText(/BEFORE photo uploaded/i)).toBeVisible();
+  await page.getByRole("button", { name: "Load Sample After" }).click();
+  await expect(page.getByText(/AFTER photo uploaded/i)).toBeVisible();
+
+  // Drop Pin #1 on Before & Pin #2 on After
+  await page.getByRole("button", { name: /Drop Pin/i }).click();
+  const beforeImg = page.getByAltText("Before Repair photograph");
+  await beforeImg.scrollIntoViewIfNeeded();
+  await beforeImg.click({ position: { x: 80, y: 60 } });
+  await page.getByPlaceholder(/Open grout gap/i).fill("Original wall scuff documented");
+  await page.getByRole("button", { name: /Save Pin Annotation/i }).click();
+  await expect(page.getByText("Original wall scuff documented")).toBeVisible();
+
+  await page.getByRole("button", { name: /Drop Pin/i }).click();
+  const afterImg = page.getByAltText("After Repair photograph");
+  await afterImg.scrollIntoViewIfNeeded();
+  await afterImg.click({ position: { x: 100, y: 80 } });
+  await page.getByPlaceholder(/Open grout gap/i).fill("Uniform repaint verified");
+  await page.getByRole("button", { name: /Save Pin Annotation/i }).click();
+  await expect(page.getByText("Uniform repaint verified")).toBeVisible();
+  await expect(page.getByTitle(/#2 /i)).toBeVisible();
+
+  // Upload Before + After for Tile Repair as well
+  await page.getByRole("button", { name: /Tile Repair.*Kitchen Renovation Closeout/i }).first().click();
+  await page.getByRole("button", { name: "Load Sample Before" }).click();
+  await expect(page.getByText(/BEFORE photo uploaded/i)).toBeVisible();
+  await page.getByRole("button", { name: "Load Sample After" }).click();
+  await expect(page.getByText(/AFTER photo uploaded/i)).toBeVisible();
+
+  // Test Wipe, Overlay and 2x Zoom comparison toggles + screenshot
+  await page.reload();
+  await page.getByRole("button", { name: /Painting.*Kitchen Renovation Closeout/i }).first().click();
+  await expect(page.getByAltText("Before Repair photograph")).toBeVisible();
+  await expect(page.getByText("Uniform repaint verified")).toBeVisible();
+
+  if (testInfo.project.name === "desktop") {
+    await page.screenshot({
+      path: path.join(SCREENSHOT_DIR, "04-contractor-evidence-desktop.png"),
+      fullPage: true,
+    });
+  }
+
+  await page.getByRole("button", { name: "2×" }).click();
+  await expect(page.getByRole("button", { name: "1×" })).toBeVisible();
+  await page.getByRole("button", { name: "Wipe" }).click();
+  await expect(page.getByLabel(/Before and after comparison position/i)).toBeVisible();
+  await page.getByRole("button", { name: "Overlay" }).click();
+  await expect(page.getByLabel(/Onion-skin opacity/i)).toBeVisible();
+
+  // 6. Switch back to Demo Homeowner -> Inspect & Settle Painting ($30 Capture) and Tile Repair ($20 Void)
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Demo Homeowner/i }).click();
+  await page.waitForURL("**/dashboard");
+
+  await page.goto(demoProjectUrl);
+  // Settle Painting ($30 -> Accept & Capture)
+  await page.locator("a", { hasText: /Inspect & Decide/i }).first().click();
+  await page.waitForURL(/\/tasks\//);
+  await expect(page.getByText("Ask about this inspection")).toBeVisible();
+  await page.getByRole("button", { name: "What happens if I reject this repair?" }).click();
+  await expect(page.getByText(/Simulation mode/i).first()).toBeVisible();
+
+  await page.getByRole("button", { name: /Accept & Capture \$30\.00/i }).click();
+  await page.getByRole("button", { name: "Capture $30.00", exact: true }).click();
+  await expect(page.getByText(/Accepted · \$30\.00 Captured/i)).toBeVisible();
+
+  // Return to Project and settle Tile Repair ($20 -> Reject & Void Hold)
+  await page.goto(demoProjectUrl);
+  await page.locator("a", { hasText: /Inspect & Decide/i }).first().click();
+  await page.waitForURL(/\/tasks\//);
+  await page.getByRole("button", { name: /Reject & Void Hold/i }).click();
+  await page.getByRole("button", { name: "Void Authorization", exact: true }).click();
+  await expect(page.getByText(/Rejected · \$20\.00 Authorization Voided/i)).toBeVisible();
+
+  // Verify Project Final Settlement Statement ($50 Agreed / $30 Captured / $20 Voided)
+  await page.goto(demoProjectUrl);
+  await expect(page.getByText(/Final Settlement Statement/i)).toBeVisible();
   if (testInfo.project.name === "desktop") {
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, "02-project-detail-desktop.png"),
@@ -90,15 +193,17 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
     });
   }
 
-  // 5. Inspect all homeowner screens
+  // 7. Verify remaining 5-destination routes & reload persistence on Settlement Ledger
   await page.goto("/payments");
-  await expect(
-    page.getByRole("heading", { name: "PayPal Payment Control Center" })
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Payment Control" })).toBeVisible();
   await page.goto("/reviews");
   await expect(page.getByRole("heading", { name: "AI Evidence Reviews" })).toBeVisible();
   await page.goto("/ledger");
   await expect(page.getByRole("heading", { name: "Settlement Ledger" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Kitchen Renovation Closeout").first()).toBeVisible();
+  await expect(page.getByText(/SIM-CAP-/i).first()).toBeVisible();
+  await expect(page.getByText(/SIM-AUTH-/i).first()).toBeVisible();
   if (testInfo.project.name === "desktop") {
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, "03-settlement-ledger-desktop.png"),
@@ -107,69 +212,10 @@ test("full PunchPay 2.0 interactive workflow across homeowner, contractor, persi
   }
   await page.goto("/settings");
   await expect(
-    page.getByRole("heading", { name: /Settings & Sandbox Diagnostics/i })
+    page.getByRole("heading", { name: /Settings & Environment Diagnostics/i })
   ).toBeVisible();
 
-  // Verify Homeowner navigating directly to /contractor is redirected cleanly back to /dashboard
-  await page.goto("/contractor");
-  await page.waitForURL("**/dashboard");
-
-  // 6. Switch to Demo Contractor, use Demo Photo Kit & Drop Pins on BOTH photos
-  await page.goto("/login");
-  await page.getByRole("button", { name: /Demo Contractor/i }).click();
-  await page.waitForURL("**/contractor");
-  await expect(page.getByRole("heading", { name: "Contractor Workspace" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Load Sample Before" }).click();
-  await expect(page.getByText(/BEFORE photo uploaded/i)).toBeVisible();
-  await page.getByRole("button", { name: "Load Sample After" }).click();
-  await expect(page.getByText(/AFTER photo uploaded/i)).toBeVisible();
-
-  // Drop Pin #1 on Before Repair photo
-  await page.getByRole("button", { name: /Drop Pin/i }).click();
-  const beforeImg = page.getByAltText("Before Repair photograph");
-  await beforeImg.scrollIntoViewIfNeeded();
-  await beforeImg.click({ position: { x: 80, y: 60 } });
-  await page
-    .getByPlaceholder(/Open grout gap/i)
-    .fill("Original wall scuff documented");
-  await page.getByRole("button", { name: /Save Pin Annotation/i }).click();
-  await expect(page.getByText("Original wall scuff documented")).toBeVisible();
-
-  // Drop Pin #2 on After Repair photo -> must render unified badge #2 on photo
-  await page.getByRole("button", { name: /Drop Pin/i }).click();
-  const afterImg = page.getByAltText("After Repair photograph");
-  await afterImg.scrollIntoViewIfNeeded();
-  await afterImg.click({ position: { x: 100, y: 80 } });
-  await page
-    .getByPlaceholder(/Open grout gap/i)
-    .fill("Uniform repaint verified");
-  await page.getByRole("button", { name: /Save Pin Annotation/i }).click();
-  await expect(page.getByText("Uniform repaint verified")).toBeVisible();
-  await expect(page.getByTitle(/#2 /i)).toBeVisible();
-
-  // Reload and confirm both 800x600 Demo Kit PNGs + both pins persist
-  await page.reload();
-  await expect(page.getByAltText("Before Repair photograph")).toBeVisible();
-  await expect(page.getByAltText("After Repair photograph")).toBeVisible();
-  await expect(page.getByText("Uniform repaint verified")).toBeVisible();
-
-  if (testInfo.project.name === "desktop") {
-    await page.screenshot({
-      path: path.join(SCREENSHOT_DIR, "04-contractor-evidence-desktop.png"),
-      fullPage: true,
-    });
-  }
-
-  // Test Wipe, Overlay and 2x Zoom comparison toggles
-  await page.getByRole("button", { name: "2×" }).click();
-  await expect(page.getByRole("button", { name: "1×" })).toBeVisible();
-  await page.getByRole("button", { name: "Wipe" }).click();
-  await expect(page.getByLabel(/Before and after comparison position/i)).toBeVisible();
-  await page.getByRole("button", { name: "Overlay" }).click();
-  await expect(page.getByLabel(/Onion-skin opacity/i)).toBeVisible();
-
-  // 7. Interactive PayPal Fault-Injection & Idempotency Lab (/playground)
+  // 8. Interactive PayPal Fault-Injection Lab (/playground)
   await page.goto("/playground");
   await expect(
     page.getByRole("heading", { name: /PayPal Settlement & Fault-Recovery Lab/i })

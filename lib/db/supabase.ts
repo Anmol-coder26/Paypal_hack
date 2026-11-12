@@ -3,11 +3,13 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { HttpError } from "../errors";
 import { assertPaymentTransition, assertWorkTransition } from "../payments/state-machine";
 import type {
+  AIProviderType,
   AIReviewRecord,
   DecisionRecord,
   EvidenceAnnotation,
   EvidenceRecord,
   PaymentEvent,
+  PaymentMode,
   PaymentRecord,
   PaymentStatus,
   Profile,
@@ -274,7 +276,7 @@ export class SupabaseRepository implements PunchPayRepository {
     if (error || !project) throw new HttpError(500, "Failed to create project in Supabase");
 
     for (const task of input.tasks) {
-      await this.addTask(project.id, task);
+      await this.addTask(project.id, task, input.payment_mode);
     }
     const bundle = await this.getProjectBundle(project.id);
     if (!bundle) throw new HttpError(500, "Failed to load created project");
@@ -290,7 +292,8 @@ export class SupabaseRepository implements PunchPayRepository {
 
   async addTask(
     projectId: string,
-    input: CreateProjectInput["tasks"][number]
+    input: CreateProjectInput["tasks"][number],
+    paymentMode: PaymentMode = "paypal_sandbox"
   ): Promise<TaskBundle> {
     const { data: task, error } = await this.client
       .from("repair_tasks")
@@ -311,6 +314,7 @@ export class SupabaseRepository implements PunchPayRepository {
       .from("payment_records")
       .insert({
         task_id: task.id,
+        payment_mode: paymentMode,
         amount_minor_units: input.amount_minor_units,
         request_nonce: nonce,
       })
@@ -523,7 +527,7 @@ export class SupabaseRepository implements PunchPayRepository {
   async saveAIReview(input: {
     task_id: string;
     model: string;
-    provider: "gemini" | "anthropic";
+    provider: AIProviderType;
     structured_findings: AIReviewRecord["structured_findings"];
     recommendation: AIReviewRecord["recommendation"];
   }): Promise<AIReviewRecord> {
@@ -558,10 +562,15 @@ export class SupabaseRepository implements PunchPayRepository {
     patch: Partial<
       Pick<
         PaymentRecord,
+        | "payment_mode"
         | "paypal_order_id"
         | "paypal_authorization_id"
         | "paypal_capture_id"
         | "paypal_status"
+        | "sim_intent_id"
+        | "sim_authorization_id"
+        | "sim_capture_id"
+        | "sim_status"
         | "payee_merchant_id"
         | "order_attempt"
         | "authorization_created_at"

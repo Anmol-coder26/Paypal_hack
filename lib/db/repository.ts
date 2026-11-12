@@ -1,4 +1,5 @@
 import type {
+  AIProviderType,
   AIReviewRecord,
   AIStructuredFindings,
   AIRecommendation,
@@ -7,6 +8,7 @@ import type {
   EvidenceRecord,
   EvidenceType,
   PaymentEvent,
+  PaymentMode,
   PaymentRecord,
   PaymentStatus,
   Profile,
@@ -30,6 +32,7 @@ export interface CreateProjectInput {
   location: string;
   due_date: string | null;
   is_guided_demo?: boolean;
+  payment_mode?: PaymentMode;
   tasks: Array<{
     title: string;
     description: string;
@@ -100,7 +103,8 @@ export interface PunchPayRepository {
   updateProjectStatus(projectId: string, status: Project["status"]): Promise<void>;
   addTask(
     projectId: string,
-    input: CreateProjectInput["tasks"][number]
+    input: CreateProjectInput["tasks"][number],
+    paymentMode?: PaymentMode
   ): Promise<TaskBundle>;
   updateTask(taskId: string, input: UpdateTaskInput): Promise<TaskBundle>;
   deleteTask(taskId: string): Promise<void>;
@@ -138,7 +142,7 @@ export interface PunchPayRepository {
   saveAIReview(input: {
     task_id: string;
     model: string;
-    provider: "gemini" | "anthropic";
+    provider: AIProviderType;
     structured_findings: AIStructuredFindings;
     recommendation: AIRecommendation;
   }): Promise<AIReviewRecord>;
@@ -151,10 +155,15 @@ export interface PunchPayRepository {
     patch?: Partial<
       Pick<
         PaymentRecord,
+        | "payment_mode"
         | "paypal_order_id"
         | "paypal_authorization_id"
         | "paypal_capture_id"
         | "paypal_status"
+        | "sim_intent_id"
+        | "sim_authorization_id"
+        | "sim_capture_id"
+        | "sim_status"
         | "payee_merchant_id"
         | "order_attempt"
         | "authorization_created_at"

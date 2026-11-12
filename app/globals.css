@@ -1,17 +1,17 @@
 @import "tailwindcss";
 
 :root {
-  --bg-canvas: #f8fafc;
+  --bg-canvas: #f7f8fa;
   --bg-surface: #ffffff;
-  --bg-navy: #0b1324;
-  --bg-navy-soft: #131f38;
+  --bg-navy: #17243a;
+  --bg-navy-soft: #1e2f4b;
   --border-subtle: #e2e8f0;
-  --text-primary: #0f172a;
+  --text-primary: #17243a;
   --text-secondary: #475569;
   --accent-blue: #2563eb;
-  --accent-emerald: #059669;
-  --accent-amber: #d97706;
-  --accent-crimson: #dc2626;
+  --accent-emerald: #047857;
+  --accent-amber: #b45309;
+  --accent-crimson: #b91c1c;
 }
 
 * {
@@ -34,4 +34,15 @@ body {
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

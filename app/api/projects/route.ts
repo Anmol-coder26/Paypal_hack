@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { getSystemConfigStatus, requireCurrentUser } from "@/lib/auth/session";
+import { getLiveSystemConfigStatus, requireCurrentUser } from "@/lib/auth/session";
 import { getRepo } from "@/lib/db";
+import { getConfiguredPaymentMode } from "@/lib/payments/simulator";
 import { DEMO_ACCOUNTS } from "@/lib/db/sqlite";
 import { HttpError } from "@/lib/errors";
 import { responseError } from "@/lib/http";
@@ -33,17 +34,18 @@ export async function GET() {
   try {
     const user = await requireCurrentUser();
     const repo = getRepo();
-    const [projects, events, contractors] = await Promise.all([
+    const [projects, events, contractors, config] = await Promise.all([
       repo.listProjectsForUser(user),
       repo.listAllEventsForUser(user),
       repo.listProfilesByRole("contractor"),
+      getLiveSystemConfigStatus(),
     ]);
     return Response.json({
       user,
       projects,
       events,
       contractors,
-      config: getSystemConfigStatus(),
+      config,
     });
   } catch (err) {
     return responseError(err);
@@ -64,6 +66,8 @@ export async function POST(request: Request) {
     const repo = getRepo();
     await repo.ensureSeedProfiles();
 
+    const activeMode = getConfiguredPaymentMode();
+
     if (parsed.data.guided_demo) {
       const contractorId = parsed.data.contractor_id || DEMO_ACCOUNTS.contractor.id;
       const contractor = await repo.getProfileById(contractorId);
@@ -73,17 +77,18 @@ export async function POST(request: Request) {
       const project = await repo.createProject({
         homeowner_id: user.id,
         contractor_id: contractor.id,
-        title: "Oak Street Living & Kitchen Closeout",
+        title: "Kitchen Renovation Closeout",
         description:
-          "Guided hackathon demonstration project: two independent repairs with separate PayPal sandbox authorizations and AI evidence reviews.",
+          "Guided closeout project: two independent repairs with separate authorization holds, photo evidence inspection, and homeowner-controlled capture or void.",
         location: "Austin, TX",
         due_date: new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10),
         is_guided_demo: true,
+        payment_mode: activeMode,
         tasks: [
           {
             title: "Painting",
             description:
-              "Repair and repaint the scuffed drywall beside the north living room window to blend smoothly with the adjacent wall.",
+              "Repair and repaint the scuffed drywall beside the north window to blend smoothly with the adjacent wall.",
             acceptance_criteria: [
               "Coverage looks uniform",
               "No obvious unpainted patches",
@@ -120,6 +125,7 @@ export async function POST(request: Request) {
       location: parsed.data.location,
       due_date: parsed.data.due_date ?? null,
       is_guided_demo: false,
+      payment_mode: activeMode,
       tasks: parsed.data.tasks,
     });
     return Response.json({ project }, { status: 201 });

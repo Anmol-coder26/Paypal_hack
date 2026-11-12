@@ -5,11 +5,13 @@ import { DatabaseSync } from "node:sqlite";
 import { HttpError } from "../errors";
 import { assertPaymentTransition, assertWorkTransition } from "../payments/state-machine";
 import type {
+  AIProviderType,
   AIReviewRecord,
   DecisionRecord,
   EvidenceAnnotation,
   EvidenceRecord,
   PaymentEvent,
+  PaymentMode,
   PaymentRecord,
   PaymentStatus,
   Profile,
@@ -165,10 +167,15 @@ export class SqliteRepository implements PunchPayRepository {
       CREATE TABLE IF NOT EXISTS payment_records (
         id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL UNIQUE REFERENCES repair_tasks(id) ON DELETE CASCADE,
+        payment_mode TEXT NOT NULL DEFAULT 'paypal_sandbox' CHECK (payment_mode IN ('paypal_sandbox', 'simulation')),
         paypal_order_id TEXT UNIQUE,
         paypal_authorization_id TEXT UNIQUE,
         paypal_capture_id TEXT UNIQUE,
         paypal_status TEXT,
+        sim_intent_id TEXT UNIQUE,
+        sim_authorization_id TEXT UNIQUE,
+        sim_capture_id TEXT UNIQUE,
+        sim_status TEXT,
         payee_merchant_id TEXT,
         amount_minor_units INTEGER NOT NULL,
         currency TEXT NOT NULL DEFAULT 'USD',
@@ -226,6 +233,28 @@ export class SqliteRepository implements PunchPayRepository {
         created_at TEXT NOT NULL
       );
     `);
+
+    // Migrate existing local SQLite databases cleanly without dropping user data
+    const cols = this.db.prepare("PRAGMA table_info(payment_records)").all() as Array<{ name: string }>;
+    const existing = new Set(cols.map((c) => c.name));
+    if (!existing.has("payment_mode")) {
+      this.db.exec("ALTER TABLE payment_records ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'paypal_sandbox'");
+    }
+    if (!existing.has("sim_intent_id")) {
+      this.db.exec("ALTER TABLE payment_records ADD COLUMN sim_intent_id TEXT");
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS payment_records_sim_intent_idx ON payment_records (sim_intent_id)");
+    }
+    if (!existing.has("sim_authorization_id")) {
+      this.db.exec("ALTER TABLE payment_records ADD COLUMN sim_authorization_id TEXT");
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS payment_records_sim_auth_idx ON payment_records (sim_authorization_id)");
+    }
+    if (!existing.has("sim_capture_id")) {
+      this.db.exec("ALTER TABLE payment_records ADD COLUMN sim_capture_id TEXT");
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS payment_records_sim_cap_idx ON payment_records (sim_capture_id)");
+    }
+    if (!existing.has("sim_status")) {
+      this.db.exec("ALTER TABLE payment_records ADD COLUMN sim_status TEXT");
+    }
   }
 
   async ensureSeedProfiles(): Promise<void> {
@@ -380,7 +409,7 @@ export class SqliteRepository implements PunchPayRepository {
       id: String(r.id),
       task_id: String(r.task_id),
       model: String(r.model),
-      provider: r.provider as "gemini" | "anthropic",
+      provider: r.provider as AIProviderType,
       structured_findings: JSON.parse(String(r.structured_findings)),
       recommendation: r.recommendation as AIReviewRecord["recommendation"],
       review_version: Number(r.review_version),
@@ -519,13 +548,14 @@ export class SqliteRepository implements PunchPayRepository {
          VALUES (?, ?, ?, ?, ?, ?, 'USD', 'PENDING_EVIDENCE', 'DRAFT', ?, '', ?, ?)`
       );
       const insertPayment = this.db.prepare(
-        `INSERT INTO payment_records (id, task_id, amount_minor_units, currency, payment_status, order_attempt, request_nonce, created_at, updated_at)
-         VALUES (?, ?, ?, 'USD', 'DRAFT', 1, ?, ?, ?)`
+        `INSERT INTO payment_records (id, task_id, payment_mode, amount_minor_units, currency, payment_status, order_attempt, request_nonce, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'USD', 'DRAFT', 1, ?, ?, ?)`
       );
       const insertEvent = this.db.prepare(
         `INSERT INTO payment_events (id, payment_record_id, task_id, actor, event_type, safe_metadata, created_at)
          VALUES (?, ?, ?, 'homeowner', 'task_created', ?, ?)`
       );
+      const initialMode: PaymentMode = input.payment_mode || "paypal_sandbox";
 
       for (const task of input.tasks) {
         const taskId = crypto.randomUUID();
@@ -542,12 +572,12 @@ export class SqliteRepository implements PunchPayRepository {
           ts,
           ts
         );
-        insertPayment.run(paymentId, taskId, task.amount_minor_units, nonce, ts, ts);
+        insertPayment.run(paymentId, taskId, initialMode, task.amount_minor_units, nonce, ts, ts);
         insertEvent.run(
           crypto.randomUUID(),
           paymentId,
           taskId,
-          JSON.stringify({ title: task.title, amount_minor_units: task.amount_minor_units }),
+          JSON.stringify({ title: task.title, amount_minor_units: task.amount_minor_units, payment_mode: initialMode }),
           ts
         );
       }
@@ -570,7 +600,8 @@ export class SqliteRepository implements PunchPayRepository {
 
   async addTask(
     projectId: string,
-    input: CreateProjectInput["tasks"][number]
+    input: CreateProjectInput["tasks"][number],
+    paymentMode: PaymentMode = "paypal_sandbox"
   ): Promise<TaskBundle> {
     const taskId = crypto.randomUUID();
     const paymentId = crypto.randomUUID();
@@ -596,10 +627,10 @@ export class SqliteRepository implements PunchPayRepository {
         );
       this.db
         .prepare(
-          `INSERT INTO payment_records (id, task_id, amount_minor_units, currency, payment_status, order_attempt, request_nonce, created_at, updated_at)
-           VALUES (?, ?, ?, 'USD', 'DRAFT', 1, ?, ?, ?)`
+          `INSERT INTO payment_records (id, task_id, payment_mode, amount_minor_units, currency, payment_status, order_attempt, request_nonce, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'USD', 'DRAFT', 1, ?, ?, ?)`
         )
-        .run(paymentId, taskId, input.amount_minor_units, nonce, ts, ts);
+        .run(paymentId, taskId, paymentMode, input.amount_minor_units, nonce, ts, ts);
       this.db
         .prepare(
           `INSERT INTO payment_events (id, payment_record_id, task_id, actor, event_type, safe_metadata, created_at)
@@ -855,7 +886,7 @@ export class SqliteRepository implements PunchPayRepository {
   async saveAIReview(input: {
     task_id: string;
     model: string;
-    provider: "gemini" | "anthropic";
+    provider: AIProviderType;
     structured_findings: AIReviewRecord["structured_findings"];
     recommendation: AIReviewRecord["recommendation"];
   }): Promise<AIReviewRecord> {
@@ -899,10 +930,15 @@ export class SqliteRepository implements PunchPayRepository {
     patch: Partial<
       Pick<
         PaymentRecord,
+        | "payment_mode"
         | "paypal_order_id"
         | "paypal_authorization_id"
         | "paypal_capture_id"
         | "paypal_status"
+        | "sim_intent_id"
+        | "sim_authorization_id"
+        | "sim_capture_id"
+        | "sim_status"
         | "payee_merchant_id"
         | "order_attempt"
         | "authorization_created_at"
@@ -926,6 +962,16 @@ export class SqliteRepository implements PunchPayRepository {
       assertPaymentTransition(current.payment_status, nextStatus);
 
       if (
+        patch.payment_mode &&
+        patch.payment_mode !== current.payment_mode &&
+        (current.paypal_order_id || current.sim_intent_id)
+      ) {
+        throw new HttpError(
+          409,
+          "Cannot switch payment mode after an order or simulated intent has already started."
+        );
+      }
+      if (
         current.paypal_authorization_id &&
         patch.paypal_authorization_id !== undefined &&
         patch.paypal_authorization_id !== current.paypal_authorization_id
@@ -939,8 +985,23 @@ export class SqliteRepository implements PunchPayRepository {
       ) {
         throw new HttpError(409, "PayPal capture ID is immutable once recorded");
       }
+      if (
+        current.sim_authorization_id &&
+        patch.sim_authorization_id !== undefined &&
+        patch.sim_authorization_id !== current.sim_authorization_id
+      ) {
+        throw new HttpError(409, "Simulated authorization ID is immutable once recorded");
+      }
+      if (
+        current.sim_capture_id &&
+        patch.sim_capture_id !== undefined &&
+        patch.sim_capture_id !== current.sim_capture_id
+      ) {
+        throw new HttpError(409, "Simulated capture ID is immutable once recorded");
+      }
 
       const merged = {
+        payment_mode: patch.payment_mode !== undefined ? patch.payment_mode : current.payment_mode,
         paypal_order_id:
           patch.paypal_order_id !== undefined
             ? patch.paypal_order_id
@@ -955,6 +1016,15 @@ export class SqliteRepository implements PunchPayRepository {
             : current.paypal_capture_id,
         paypal_status:
           patch.paypal_status !== undefined ? patch.paypal_status : current.paypal_status,
+        sim_intent_id:
+          patch.sim_intent_id !== undefined ? patch.sim_intent_id : current.sim_intent_id,
+        sim_authorization_id:
+          patch.sim_authorization_id !== undefined
+            ? patch.sim_authorization_id
+            : current.sim_authorization_id,
+        sim_capture_id:
+          patch.sim_capture_id !== undefined ? patch.sim_capture_id : current.sim_capture_id,
+        sim_status: patch.sim_status !== undefined ? patch.sim_status : current.sim_status,
         payee_merchant_id:
           patch.payee_merchant_id !== undefined
             ? patch.payee_merchant_id
@@ -976,10 +1046,15 @@ export class SqliteRepository implements PunchPayRepository {
         .prepare(
           `UPDATE payment_records SET
              payment_status = ?,
+             payment_mode = ?,
              paypal_order_id = ?,
              paypal_authorization_id = ?,
              paypal_capture_id = ?,
              paypal_status = ?,
+             sim_intent_id = ?,
+             sim_authorization_id = ?,
+             sim_capture_id = ?,
+             sim_status = ?,
              payee_merchant_id = ?,
              order_attempt = ?,
              authorization_created_at = ?,
@@ -990,10 +1065,15 @@ export class SqliteRepository implements PunchPayRepository {
         )
         .run(
           nextStatus,
+          merged.payment_mode,
           merged.paypal_order_id,
           merged.paypal_authorization_id,
           merged.paypal_capture_id,
           merged.paypal_status,
+          merged.sim_intent_id,
+          merged.sim_authorization_id,
+          merged.sim_capture_id,
+          merged.sim_status,
           merged.payee_merchant_id,
           merged.order_attempt,
           merged.authorization_created_at,

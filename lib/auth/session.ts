@@ -2,11 +2,13 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { cookies } from "next/headers";
+import { getOllamaConfig, probeOllamaHealth } from "../ai/provider";
 import { getRepo, isSupabaseConfigured } from "../db";
 import { DEMO_ACCOUNTS, hashPassword, verifyPassword } from "../db/sqlite";
 import { HttpError } from "../errors";
 import { getPayPalClientConfig } from "../payments/paypal-client";
-import type { Profile, SystemConfigStatus, UserRole } from "../types";
+import { getConfiguredPaymentMode } from "../payments/simulator";
+import type { AIProviderType, Profile, SystemConfigStatus, UserRole } from "../types";
 
 export const SESSION_COOKIE_NAME = "punchpay_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
@@ -157,17 +159,42 @@ export async function registerUserAccount(input: {
 
 export function getSystemConfigStatus(): SystemConfigStatus {
   const paypal = getPayPalClientConfig();
+  const mode = getConfiguredPaymentMode();
+  const preferred = (process.env.AI_PROVIDER || "").trim().toLowerCase();
   const geminiKey = process.env.GEMINI_API_KEY || "";
   const anthropicKey = process.env.ANTHROPIC_API_KEY || "";
-  const aiProvider = geminiKey ? "gemini" : anthropicKey ? "anthropic" : null;
-  const aiModel =
-    aiProvider === "gemini"
-      ? process.env.GEMINI_MODEL || "gemini-2.5-flash"
-      : aiProvider === "anthropic"
-      ? process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5"
-      : null;
+  const ollamaCfg = getOllamaConfig();
+
+  let aiProvider: AIProviderType | null = null;
+  let aiModel: string | null = null;
+  if (preferred === "ollama") {
+    aiProvider = "ollama";
+    aiModel = ollamaCfg.model;
+  } else if (preferred === "gemini" && geminiKey) {
+    aiProvider = "gemini";
+    aiModel = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  } else if (preferred === "anthropic" && anthropicKey) {
+    aiProvider = "anthropic";
+    aiModel = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
+  } else if (geminiKey) {
+    aiProvider = "gemini";
+    aiModel = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  } else if (anthropicKey) {
+    aiProvider = "anthropic";
+    aiModel = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
+  } else if (ollamaCfg.configured) {
+    aiProvider = "ollama";
+    aiModel = ollamaCfg.model;
+  }
 
   return {
+    payment: {
+      mode,
+      label:
+        mode === "simulation"
+          ? "Simulation · No money moved"
+          : "PayPal Sandbox · Test transactions",
+    },
     paypal: {
       configured: paypal.configured,
       environment: "sandbox",
@@ -176,13 +203,30 @@ export function getSystemConfigStatus(): SystemConfigStatus {
       webhookConfigured: Boolean(paypal.webhookId),
     },
     ai: {
-      configured: Boolean(aiProvider),
+      configured: Boolean(aiProvider && (aiProvider !== "ollama" || ollamaCfg.explicitlySelected)),
       provider: aiProvider,
       model: aiModel,
     },
     database: {
       driver: isSupabaseConfigured() ? "supabase" : "sqlite",
       configured: true,
+    },
+  };
+}
+
+export async function getLiveSystemConfigStatus(): Promise<SystemConfigStatus> {
+  const base = getSystemConfigStatus();
+  if (base.ai.provider === "gemini" || base.ai.provider === "anthropic") {
+    return base;
+  }
+  const ollama = await probeOllamaHealth();
+  return {
+    ...base,
+    ai: {
+      configured: ollama.reachable && ollama.modelAvailable,
+      provider: ollama.reachable || ollama.configured ? "ollama" : base.ai.provider,
+      model: ollama.reachable || ollama.configured ? ollama.model : base.ai.model,
+      ollama,
     },
   };
 }

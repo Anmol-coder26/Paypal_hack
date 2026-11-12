@@ -1,31 +1,29 @@
-# PunchPay 2.0 — 3-Minute Hackathon Demo Script
+# PunchPay 2.1 — 3-Minute Guided Demo Script
 
-**Core story:** A homeowner hires a contractor for **$50** across two independent repairs (**Painting — $30** and **Tile Repair — $20**). Instead of bundling everything into one payment, PunchPay authorizes each task separately via PayPal, inspects photo evidence with multimodal AI, captures **$30** for completed painting, and voids the **$20** hold for defective tile work.
+**Core story:** *Every fix has its own payment. Review the work. Decide what gets paid.* A homeowner creates **Kitchen Renovation Closeout ($50)** across two independent repairs (**Painting — $30** and **Tile Repair — $20**). PunchPay keeps payment mode explicitly visible (**PayPal Sandbox · Test transactions** when configured, or **Simulation · No money moved** offline).
 
-## Shot-by-Shot Storyboard (2:45)
+## Shot-by-Shot Storyboard (3:00)
 
-1. **0:00 – 0:25 · Landing & Problem**
-   - Open `/` (`Pay for the work that's done. Not the work that isn't.`).
-   - Briefly explain why bundled renovation invoices fail when one fix is done and another isn't.
-   - Click **Start a Project** -> sign in via **Demo Homeowner**.
+1. **0:00 – 0:25 · Landing & Overview (`/`, `/login`, `/dashboard`)**
+   - Open `/` (*"Pay for the work that's done. Not the work that isn't."*) and click **Start a Project** → **Demo Homeowner**.
+   - Highlight the top bar's restrained environment badge (`Simulation · No money moved` or `PayPal Sandbox · Test transactions`) and structured **Repair Projects** table.
 
-2. **0:25 – 0:55 · Create Guided Project & Authorize Two PayPal Holds**
-   - Click **Guided Demo ($50 · 2 Tasks)** from the Homeowner Command Center (creates *Oak Street Living & Kitchen Closeout* with Painting `$30.00` and Tile Repair `$20.00`).
-   - Note the 6-step Progress Tracker starts at Step 1 (*Project Created*).
-   - Open **Authorize $30.00** -> approve in PayPal Sandbox Personal popup -> server authorizes and saves PayPal Authorization ID.
-   - Open **Authorize $20.00** -> approve in PayPal Sandbox Personal popup -> Progress Tracker advances to Step 2 (*Payments Authorized*).
+2. **0:25 – 0:55 · Create Kitchen Closeout & Authorize Independent Holds**
+   - Click **Continue Guided Demo ($50)** (creates *Kitchen Renovation Closeout*: **Painting $30.00** + **Tile Repair $20.00**).
+   - Authorize **Painting ($30.00)** and **Tile Repair ($20.00)** independently (via PayPal Sandbox popup when live credentials are configured, or via the 2-step **Simulated Checkout** approval flow offline).
+   - Point out the compact **Created → Buyer Approved → Authorized Hold → Captured / Voided** lifecycle on each task card.
 
-3. **0:55 – 1:35 · Contractor Uploads Evidence & Runs AI Inspection**
+3. **0:55 – 1:35 · Contractor Evidence Upload & Inspection**
    - Click **Switch to Demo Contractor** in the sidebar.
-   - In **Contractor Desk**, select **Painting**, click **Load Sample Before** and **Load Sample After** (or upload your own photos through the Sharp sanitization pipeline), then click **Run AI Inspection**.
-   - Switch to **Tile Repair**, click **Load Sample Before** (cracked tile) and **Load Sample After** (misaligned tile with open grout gap), optionally drop a Before/After inspection pin, and click **Run AI Inspection**.
-   - Show the **End-to-End Settlement Pipeline** advances cleanly to Step 4 (*AI Reviews Complete*).
+   - In **Contractor Workspace**, select **Painting**, click **Load Sample Before** and **Load Sample After** (processed cleanly through `sharp` magic-byte sanitization), and run **Run AI Inspection** (uses local Ollama `qwen2.5vl:3b` or Gemini/Claude when active; clearly shows **Manual Checklist Mode** if offline).
+   - Select **Tile Repair**, load **Sample Before** (cracked tile) + **Sample After** (misaligned tile with open dark grout gap), optionally drop a Before/After inspection pin (`#1`/`#2`), and submit.
 
-4. **1:35 – 2:20 · Homeowner Reviews Findings & Settles Independently**
-   - Click **Switch to Demo Homeowner** in the sidebar and open **Oak Street Living & Kitchen Closeout**.
-   - Open **Painting** (`/tasks/[id]`): drag the **Before ⟷ After** wipe slider (`2×` zoom & synchronized pins `#1`/`#2`), read AI's *Appears Satisfied* checklist, click **Accept & Capture $30.00** -> confirm dialog -> verify PayPal Capture (`COMPLETED`).
-   - Open **Tile Repair** (`/tasks/[id]`): inspect AI's *Concerns Identified* + uncertainty notes, click **Reject & Void Hold** -> confirm dialog -> verify PayPal Authorization Void (`VOIDED`).
+4. **1:35 – 2:25 · Homeowner Evidence Review, Q&A & Independent Settlement**
+   - Click **Switch to Demo Homeowner** and open **Kitchen Renovation Closeout**.
+   - Open **Painting (`/tasks/[id]`)**: drag the **Before ⟷ After** wipe slider (`2×` zoom + synchronized pins), inspect **Assessment / What the photos show / Acceptance criteria / Limitations**, ask **"What happens if I reject this repair?"** in **Ask about this inspection**, then click **Accept & Capture $30.00**.
+   - Open **Tile Repair (`/tasks/[id]`)**: examine the open right-edge grout gap, ask **"Which acceptance criteria are still unmet?"**, and click **Reject & Void Hold** ($20.00 hold released without charging).
 
-5. **2:20 – 2:45 · Closing Summary & Settlement Ledger**
-   - Return to `/projects/[id]` to show the compact 4-stage PayPal lifecycle inside each task card and the **PayPal Settlement Verified** closing banner (`$50.00` total · `$30.00 Captured` · `$20.00 Voided` with persisted PayPal Order, Authorization, and Capture IDs).
-   - Open `/ledger`, press **Reload (`F5`)** to prove database persistence, click a row to inspect full PayPal timestamps & **Reconcile Status from PayPal** in the Transaction Record Drawer, and click **Export CSV**.
+5. **2:25 – 3:00 · Settlement Statement, Ledger & Fault-Recovery Proof**
+   - Return to `/projects/[id]` to show the **Final Settlement Statement** (`$50.00` Agreed · `$30.00` Captured · `$20.00` Voided) with explicit `Source` and reference IDs.
+   - Open `/ledger`, press **Reload (`F5`)** to prove SQLite/Supabase persistence, open the **Transaction Record Drawer**, and click **Export CSV**.
+   - Briefly show `/playground` (PayPal Fault-Recovery Lab) to demonstrate safe timeout recovery via `GET` reconciliation.

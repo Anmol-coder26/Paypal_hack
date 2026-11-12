@@ -1,4 +1,4 @@
-import { getCurrentUser, getSystemConfigStatus } from "@/lib/auth/session";
+import { getCurrentUser, getLiveSystemConfigStatus } from "@/lib/auth/session";
 import { getRepo } from "@/lib/db";
 import { responseError } from "@/lib/http";
 
@@ -9,7 +9,7 @@ export async function GET() {
     return Response.json({
       user,
       contractors,
-      config: getSystemConfigStatus(),
+      config: await getLiveSystemConfigStatus(),
     });
   } catch (err) {
     return responseError(err);

@@ -113,11 +113,15 @@ export interface AIStructuredFindings {
   limitations_and_uncertainty: string[];
 }
 
+export type PaymentMode = "paypal_sandbox" | "simulation";
+
+export type AIProviderType = "ollama" | "gemini" | "anthropic";
+
 export interface AIReviewRecord {
   id: string;
   task_id: string;
   model: string;
-  provider: "gemini" | "anthropic";
+  provider: AIProviderType;
   structured_findings: AIStructuredFindings;
   recommendation: AIRecommendation;
   review_version: number;
@@ -127,10 +131,15 @@ export interface AIReviewRecord {
 export interface PaymentRecord {
   id: string;
   task_id: string;
+  payment_mode: PaymentMode;
   paypal_order_id: string | null;
   paypal_authorization_id: string | null;
   paypal_capture_id: string | null;
   paypal_status: string | null;
+  sim_intent_id: string | null;
+  sim_authorization_id: string | null;
+  sim_capture_id: string | null;
+  sim_status: string | null;
   payee_merchant_id: string | null;
   amount_minor_units: number;
   currency: "USD";
@@ -148,7 +157,7 @@ export interface PaymentEvent {
   id: string;
   payment_record_id: string;
   task_id: string;
-  actor: "homeowner" | "contractor" | "ai" | "paypal" | "webhook" | "system";
+  actor: "homeowner" | "contractor" | "ai" | "paypal" | "webhook" | "simulation" | "system";
   event_type: string;
   paypal_event_id: string | null;
   safe_metadata: Record<string, unknown>;
@@ -196,6 +205,10 @@ export interface ProjectBundle extends Project {
 }
 
 export interface SystemConfigStatus {
+  payment: {
+    mode: PaymentMode;
+    label: string;
+  };
   paypal: {
     configured: boolean;
     environment: "sandbox";
@@ -205,8 +218,16 @@ export interface SystemConfigStatus {
   };
   ai: {
     configured: boolean;
-    provider: "gemini" | "anthropic" | null;
+    provider: AIProviderType | null;
     model: string | null;
+    ollama?: {
+      configured: boolean;
+      reachable: boolean;
+      modelAvailable: boolean;
+      model: string;
+      baseUrl: string;
+      error?: string;
+    };
   };
   database: {
     driver: "supabase" | "sqlite";

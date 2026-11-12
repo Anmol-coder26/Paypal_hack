@@ -18,7 +18,6 @@ import {
   Card,
   PaymentStatusBadge,
   Skeleton,
-  WorkStatusBadge,
 } from "@/components/ui/primitives";
 import type { PaymentEvent, Profile, ProjectBundle, SystemConfigStatus } from "@/lib/types";
 import { formatDateTime, formatMoney } from "@/lib/utils";
@@ -111,6 +110,12 @@ export default function HomeownerDashboardPage() {
     const voidedMinor = allTasks
       .filter((t) => t.payment_status === "VOIDED")
       .reduce((sum, t) => sum + t.amount_minor_units, 0);
+    const paypalCapturedMinor = allTasks
+      .filter((t) => t.payment_status === "CAPTURED" && t.payment.payment_mode === "paypal_sandbox")
+      .reduce((sum, t) => sum + t.amount_minor_units, 0);
+    const simCapturedMinor = allTasks
+      .filter((t) => t.payment_status === "CAPTURED" && t.payment.payment_mode === "simulation")
+      .reduce((sum, t) => sum + t.amount_minor_units, 0);
     const awaitingDecisionCount = allTasks.filter(
       (t) =>
         ["EVIDENCE_SUBMITTED", "AI_REVIEWED"].includes(t.work_status) &&
@@ -122,6 +127,8 @@ export default function HomeownerDashboardPage() {
       authorizedMinor,
       capturedMinor,
       voidedMinor,
+      paypalCapturedMinor,
+      simCapturedMinor,
       awaitingDecisionCount,
       allTasks,
     };
@@ -160,11 +167,11 @@ export default function HomeownerDashboardPage() {
 
   if (loading || !user || !config) {
     return (
-      <div className="min-h-screen bg-slate-50 p-8 space-y-6 max-w-7xl mx-auto">
+      <div className="min-h-screen bg-[#F7F8FA] p-8 space-y-6 max-w-7xl mx-auto">
         <Skeleton className="h-12 w-72" />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {[1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-28" />
+            <Skeleton key={i} className="h-24" />
           ))}
         </div>
         <Skeleton className="h-64 w-full" />
@@ -184,12 +191,11 @@ export default function HomeownerDashboardPage() {
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-              Homeowner Command Center
+            <h1 className="text-2xl font-bold tracking-tight text-[#17243A]">
+              Overview
             </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              Real-time project totals, PayPal authorizations, AI evidence alerts, and
-              settlement history.
+            <p className="mt-1 text-sm text-slate-600">
+              Every fix has its own payment. Review the work and decide what gets paid.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
@@ -205,67 +211,74 @@ export default function HomeownerDashboardPage() {
               Refresh
             </Button>
             <Button variant="secondary" onClick={launchGuidedDemo} disabled={creatingDemo}>
-              <Sparkles className="h-4 w-4 text-blue-400" />
-              {creatingDemo ? "Creating Demo..." : "Guided Demo ($50 · 2 Tasks)"}
+              <Sparkles className="h-4 w-4 text-blue-300" />
+              {creatingDemo ? "Creating Demo..." : "Continue Guided Demo ($50)"}
             </Button>
             <Link href="/projects/new">
               <Button variant="primary">
                 <FolderPlus className="h-4 w-4" />
-                Create Project
+                New Project
               </Button>
             </Link>
           </div>
         </div>
 
         {error && (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
             {error}
           </div>
         )}
 
-        {/* 5 Live Financial Overview Cards */}
+        {/* Financial Overview Row (separates PayPal vs Simulation sources cleanly) */}
         <section
           aria-label="Financial overview"
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5"
+          className="grid grid-cols-2 gap-4 lg:grid-cols-5"
         >
           {[
             {
-              label: "Total Repair Value",
+              label: "Total Agreed",
               value: formatMoney(metrics.totalRepairMinor),
-              sub: `${metrics.allTasks.length} repair task(s)`,
-              tone: "text-slate-900",
+              sub: `${metrics.allTasks.length} repair item(s)`,
+              tone: "text-[#17243A]",
             },
             {
-              label: "Currently Authorized",
+              label: "Authorized Holds",
               value: formatMoney(metrics.authorizedMinor),
-              sub: "Active PayPal holds",
-              tone: "text-blue-600",
+              sub: "Uncaptured task holds",
+              tone: "text-[#2563EB]",
             },
             {
-              label: "Successfully Captured",
+              label: "Captured Value",
               value: formatMoney(metrics.capturedMinor),
-              sub: "Verified PayPal captures",
-              tone: "text-emerald-600",
+              sub:
+                metrics.paypalCapturedMinor > 0 && metrics.simCapturedMinor > 0
+                  ? `${formatMoney(metrics.paypalCapturedMinor)} PayPal · ${formatMoney(metrics.simCapturedMinor)} Sim`
+                  : metrics.paypalCapturedMinor > 0
+                  ? "PayPal Sandbox verified"
+                  : metrics.simCapturedMinor > 0
+                  ? "Simulation (no money moved)"
+                  : "No captures yet",
+              tone: "text-[#047857]",
             },
             {
-              label: "Voided Amount",
+              label: "Voided Holds",
               value: formatMoney(metrics.voidedMinor),
               sub: "Released (never charged)",
-              tone: "text-slate-600",
+              tone: "text-slate-700",
             },
             {
-              label: "Awaiting Review",
+              label: "Pending Reviews",
               value: String(metrics.awaitingDecisionCount),
-              sub: "Tasks ready for decision",
-              tone: metrics.awaitingDecisionCount > 0 ? "text-amber-600" : "text-slate-900",
+              sub: "Awaiting decision",
+              tone: metrics.awaitingDecisionCount > 0 ? "text-[#B45309]" : "text-[#17243A]",
             },
           ].map((kpi) => (
             <Card key={kpi.label} className="p-4">
               <p className="text-xs font-medium text-slate-500">{kpi.label}</p>
-              <p className={`mt-2 text-2xl font-bold tabular-nums ${kpi.tone}`}>
+              <p className={`mt-1.5 text-xl font-bold tabular-nums ${kpi.tone}`}>
                 {kpi.value}
               </p>
-              <p className="mt-1 text-[11px] text-slate-400">{kpi.sub}</p>
+              <p className="mt-1 text-[11px] text-slate-500">{kpi.sub}</p>
             </Card>
           ))}
         </section>
@@ -273,10 +286,10 @@ export default function HomeownerDashboardPage() {
         <AllocationBar tasks={metrics.allTasks} />
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* Active Projects */}
-          <div className="lg:col-span-8 space-y-4">
+          {/* Structured Projects Table */}
+          <div className="lg:col-span-8 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-base font-semibold text-slate-900">
+              <h2 className="text-base font-semibold text-[#17243A]">
                 Repair Projects ({filteredProjects.length})
               </h2>
               <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
@@ -287,8 +300,8 @@ export default function HomeownerDashboardPage() {
                     onClick={() => setStatusFilter(status)}
                     className={`rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
                       statusFilter === status
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-600 hover:text-slate-900"
+                        ? "bg-[#17243A] text-white"
+                        : "text-slate-600 hover:text-[#17243A]"
                     }`}
                   >
                     {status === "ALL" ? "All" : status.charAt(0) + status.slice(1).toLowerCase()}
@@ -299,111 +312,133 @@ export default function HomeownerDashboardPage() {
 
             {filteredProjects.length === 0 ? (
               <Card className="p-8 text-center space-y-3">
-                <p className="text-sm font-semibold text-slate-900">
-                  No repair projects match your view
+                <p className="text-sm font-semibold text-[#17243A]">
+                  No repair projects yet
                 </p>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Create a custom punch-list project or launch the Guided Demo ($30 Painting +
-                  $20 Tile Repair) to start authorizing PayPal holds.
+                  Start the Guided Demo (Kitchen Renovation Closeout · $30 Painting + $20 Tile
+                  Repair) or create a custom repair project.
                 </p>
                 <div className="flex justify-center gap-3 pt-2">
                   <Button variant="primary" onClick={() => router.push("/projects/new")}>
-                    Create Custom Project
+                    New Project
                   </Button>
                   <Button variant="outline" onClick={launchGuidedDemo} disabled={creatingDemo}>
-                    Launch Guided Demo
+                    Continue Guided Demo
                   </Button>
                 </div>
               </Card>
             ) : (
-              <div className="space-y-4">
-                {filteredProjects.map((project) => {
-                  const total = project.tasks.reduce(
-                    (sum, t) => sum + t.amount_minor_units,
-                    0
-                  );
-                  return (
-                    <Card key={project.id} className="p-5 hover:border-slate-300 transition-colors">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <Link
-                              href={`/projects/${project.id}`}
-                              className="text-base font-semibold text-slate-900 hover:text-blue-600"
-                            >
-                              {project.title}
-                            </Link>
-                            {project.is_guided_demo && (
-                              <span className="rounded-full bg-blue-50 border border-blue-200 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
-                                Guided Demo
-                              </span>
-                            )}
-                          </div>
-                          <p className="mt-1 text-xs text-slate-500">
-                            {project.location} · Contractor: {project.contractor_name}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-base font-bold text-slate-900 tabular-nums">
-                            {formatMoney(total)}
-                          </p>
-                          <p className="text-[11px] text-slate-500">
-                            {project.tasks.length} task(s) · {project.status}
-                          </p>
-                        </div>
-                      </div>
+              <Card className="overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-[#F7F8FA] text-slate-500">
+                        <th className="py-3 px-4 font-semibold">Project</th>
+                        <th className="py-3 px-3 font-semibold">Contractor</th>
+                        <th className="py-3 px-3 font-semibold text-right">Agreed</th>
+                        <th className="py-3 px-3 font-semibold">Tasks</th>
+                        <th className="py-3 px-3 font-semibold">Payment State</th>
+                        <th className="py-3 px-4 font-semibold text-right">Next Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredProjects.map((project) => {
+                        const total = project.tasks.reduce(
+                          (sum, t) => sum + t.amount_minor_units,
+                          0
+                        );
+                        const settledCount = project.tasks.filter((t) =>
+                          ["CAPTURED", "VOIDED", "AUTHORIZATION_EXPIRED"].includes(
+                            t.payment_status
+                          )
+                        ).length;
+                        const hasIssue = project.tasks.some((t) =>
+                          ["RECONCILIATION_REQUIRED", "PAYMENT_FAILED"].includes(
+                            t.payment_status
+                          )
+                        );
+                        const hasAuth = project.tasks.some(
+                          (t) => t.payment_status === "AUTHORIZED"
+                        );
+                        const summaryStatus = hasIssue
+                          ? "RECONCILIATION_REQUIRED"
+                          : settledCount === project.tasks.length && project.tasks.length > 0
+                          ? project.tasks.some((t) => t.payment_status === "CAPTURED")
+                            ? "CAPTURED"
+                            : "VOIDED"
+                          : hasAuth
+                          ? "AUTHORIZED"
+                          : project.tasks[0]?.payment_status || "DRAFT";
 
-                      <div className="mt-4 divide-y divide-slate-100 rounded-xl border border-slate-100 bg-slate-50/70">
-                        {project.tasks.map((task) => (
-                          <Link
-                            key={task.id}
-                            href={`/tasks/${task.id}`}
-                            className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 hover:bg-slate-100/70 transition-colors"
+                        const nextLabel =
+                          settledCount === project.tasks.length && project.tasks.length > 0
+                            ? "View Summary"
+                            : project.tasks.some(
+                                (t) =>
+                                  t.payment_status === "AUTHORIZED" &&
+                                  ["EVIDENCE_SUBMITTED", "AI_REVIEWED"].includes(t.work_status)
+                              )
+                            ? "Inspect & Decide"
+                            : "Open Workspace";
+
+                        return (
+                          <tr
+                            key={project.id}
+                            className="hover:bg-slate-50/70 transition-colors"
                           >
-                            <div className="min-w-0">
-                              <p className="text-sm font-medium text-slate-900 truncate">
-                                {task.title}
+                            <td className="py-3.5 px-4">
+                              <Link
+                                href={`/projects/${project.id}`}
+                                className="font-semibold text-[#17243A] hover:text-[#2563EB]"
+                              >
+                                {project.title}
+                              </Link>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                {project.location}
+                                {project.is_guided_demo ? " · Guided Demo" : ""}
                               </p>
-                              <div className="mt-1 flex flex-wrap items-center gap-2">
-                                <PaymentStatusBadge status={task.payment_status} />
-                                <WorkStatusBadge status={task.work_status} />
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <span className="font-mono-code text-sm font-semibold text-slate-900 tabular-nums">
-                                {formatMoney(task.amount_minor_units)}
-                              </span>
-                              <ArrowRight className="h-4 w-4 text-slate-400" />
-                            </div>
-                          </Link>
-                        ))}
-                      </div>
-
-                      <div className="mt-3 flex justify-end">
-                        <Link
-                          href={`/projects/${project.id}`}
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700"
-                        >
-                          Open Project Dossier
-                          <ArrowRight className="h-3.5 w-3.5" />
-                        </Link>
-                      </div>
-                    </Card>
-                  );
-                })}
-              </div>
+                            </td>
+                            <td className="py-3.5 px-3 text-slate-700 whitespace-nowrap">
+                              {project.contractor_name}
+                            </td>
+                            <td className="py-3.5 px-3 text-right font-mono-code font-semibold text-[#17243A] tabular-nums">
+                              {formatMoney(total)}
+                            </td>
+                            <td className="py-3.5 px-3 text-slate-600 whitespace-nowrap tabular-nums">
+                              {settledCount}/{project.tasks.length} settled
+                            </td>
+                            <td className="py-3.5 px-3">
+                              <PaymentStatusBadge status={summaryStatus} />
+                            </td>
+                            <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                              <Link
+                                href={`/projects/${project.id}`}
+                                className="inline-flex items-center gap-1 font-semibold text-[#2563EB] hover:underline"
+                              >
+                                {nextLabel}
+                                <ArrowRight className="h-3.5 w-3.5" />
+                              </Link>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
             )}
           </div>
 
-          {/* Right Rail: Pending Decisions & Financial Event Feed */}
-          <div className="lg:col-span-4 space-y-6">
+          {/* Right Rail: Pending Decisions & Activity */}
+          <div className="lg:col-span-4 space-y-5">
             <Card className="p-5">
-              <h2 className="text-sm font-semibold text-slate-900">
-                Pending Decisions &amp; AI Alerts
+              <h2 className="text-sm font-semibold text-[#17243A]">
+                Pending Reviews ({pendingDecisions.length})
               </h2>
               {pendingDecisions.length === 0 ? (
                 <p className="mt-3 text-xs text-slate-500">
-                  No tasks currently awaiting your capture/void decision.
+                  No authorized tasks awaiting homeowner review right now.
                 </p>
               ) : (
                 <ul className="mt-3 space-y-2.5">
@@ -412,34 +447,34 @@ export default function HomeownerDashboardPage() {
                     return (
                       <li
                         key={task.id}
-                        className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2"
+                        className="rounded-xl border border-slate-200 bg-[#F7F8FA] p-3 space-y-2"
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <p className="text-xs font-semibold text-slate-900">
+                            <p className="text-xs font-semibold text-[#17243A]">
                               {task.title}
                             </p>
                             <p className="text-[11px] text-slate-500">{project.title}</p>
                           </div>
-                          <span className="font-mono-code text-xs font-semibold text-slate-900">
+                          <span className="font-mono-code text-xs font-semibold text-[#17243A] tabular-nums">
                             {formatMoney(task.amount_minor_units)}
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5 text-[11px]">
                           {assessment === "concerns_identified" ? (
-                            <AlertTriangle className="h-3.5 w-3.5 text-red-600" />
+                            <AlertTriangle className="h-3.5 w-3.5 text-[#B91C1C]" />
                           ) : (
-                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                            <CheckCircle2 className="h-3.5 w-3.5 text-[#047857]" />
                           )}
                           <span className="text-slate-700">
                             {assessment
-                              ? `AI: ${assessment.replaceAll("_", " ")}`
+                              ? `Inspection: ${assessment.replaceAll("_", " ")}`
                               : "Evidence ready for inspection"}
                           </span>
                         </div>
                         <Link href={`/tasks/${task.id}`} className="block">
                           <Button size="sm" variant="primary" className="w-full">
-                            Inspect &amp; Decide
+                            Review &amp; Decide
                           </Button>
                         </Link>
                       </li>
@@ -451,27 +486,26 @@ export default function HomeownerDashboardPage() {
 
             <Card className="p-5">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-slate-900">
-                  Financial Event Timeline
+                <h2 className="text-sm font-semibold text-[#17243A]">
+                  Recent Activity
                 </h2>
                 <Link
                   href="/ledger"
-                  className="text-xs font-medium text-blue-600 hover:text-blue-700"
+                  className="text-xs font-medium text-[#2563EB] hover:underline"
                 >
                   Full Ledger
                 </Link>
               </div>
               {events.length === 0 ? (
                 <p className="mt-3 text-xs text-slate-500">
-                  Events will appear here as tasks, authorizations, reviews, and settlements
-                  occur.
+                  Authorizations, inspections, and settlements appear here.
                 </p>
               ) : (
                 <ol className="mt-4 space-y-3 border-l border-slate-200 pl-4">
-                  {events.slice(0, 8).map((ev) => (
+                  {events.slice(0, 7).map((ev) => (
                     <li key={ev.id} className="relative text-xs">
-                      <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full border-2 border-white bg-blue-600" />
-                      <p className="font-medium text-slate-900">
+                      <span className="absolute -left-[21px] top-1 h-2 w-2 rounded-full bg-[#2563EB]" />
+                      <p className="font-medium text-[#17243A]">
                         {ev.event_type.replaceAll("_", " ")} ·{" "}
                         <span className="text-slate-500">{ev.task_title}</span>
                       </p>
