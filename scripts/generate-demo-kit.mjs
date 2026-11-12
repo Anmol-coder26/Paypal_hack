@@ -38,9 +38,7 @@ function wallSvg(withScuff) {
           <path d="M402 278 l108 -14 M392 294 l126 -6 M416 306 l72 5" stroke="#47423a" stroke-width="3.5" stroke-linecap="round"/>
           <path d="M446 258 l-18 52" stroke="#5c564c" stroke-width="2" stroke-dasharray="4 3"/>
         </g>`
-      : `<g opacity="0.16">
-          <ellipse cx="458" cy="285" rx="95" ry="38" fill="#f7f4ec" filter="url(#blur)"/>
-        </g>`
+      : `<!-- Cleanly feathered, uniform matte finish matching the surrounding wall -->`
   }
   <g font-family="ui-monospace, Menlo, monospace" font-size="13">
     <rect x="16" y="16" width="320" height="28" rx="6" fill="#0b1324" opacity="0.82"/>
