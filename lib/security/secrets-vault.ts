@@ -58,7 +58,7 @@ function getMasterKey(): Buffer {
 
   fs.mkdirSync(path.dirname(keyFile), { recursive: true });
   try {
-    const existingHex = fs.readFileSync(keyFile, "utf8").trim();
+    const existingHex = fs.readFileSync(/*turbopackIgnore: true*/ keyFile, "utf8").trim();
     if (/^[0-9a-f]{64}$/i.test(existingHex)) {
       const buf = Buffer.from(existingHex, "hex");
       cachedKeysByPath.set(keyFile, buf);
