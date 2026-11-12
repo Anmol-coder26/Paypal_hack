@@ -33,7 +33,7 @@ export default function SettingsPage() {
   // Admin credential form state (kept strictly in transient component state; never persisted in localStorage)
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [showKey, setShowKey] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("gemini-2.5-flash");
+  const [selectedModel, setSelectedModel] = useState("gemini-3.5-flash");
   const [replaceMode, setReplaceMode] = useState(false);
 
   const [aiBusy, setAiBusy] = useState<"save" | "test" | "remove" | null>(null);
@@ -60,7 +60,10 @@ export default function SettingsPage() {
         setCanManage(Boolean(aiJson.canManage));
         setGeminiMeta(aiJson.gemini);
         if (aiJson.gemini?.model) {
-          setSelectedModel(aiJson.gemini.model);
+          const supported = aiJson.gemini.supportedModels || ["gemini-3.5-flash"];
+          setSelectedModel(
+            supported.includes(aiJson.gemini.model) ? aiJson.gemini.model : supported[0]
+          );
         }
         if (aiJson.config) setConfig(aiJson.config);
       }
@@ -224,9 +227,11 @@ export default function SettingsPage() {
   const ollama = config.ai.ollama;
   const g = geminiMeta ?? config.ai.gemini;
   const supportedModels = g?.supportedModels ?? [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.8-flash",
   ];
   const hasVaultKey = g?.source === "admin_vault";
   const hasEnvKey = g?.source === "environment";
@@ -463,7 +468,7 @@ export default function SettingsPage() {
                     {supportedModels.map((m) => (
                       <option key={m} value={m}>
                         {m}
-                        {m === "gemini-2.5-flash" ? " (Recommended)" : ""}
+                        {m === "gemini-3.5-flash" ? " (Recommended)" : ""}
                       </option>
                     ))}
                   </select>
@@ -615,7 +620,7 @@ PAYMENT_MODE=simulation
 
 # Optional Gemini Environment Alternative (never overwritten by Settings UI)
 GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.5-flash
 
 # Optional Local Ollama Vision Fallback
 OLLAMA_BASE_URL=http://127.0.0.1:11434

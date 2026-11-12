@@ -5,11 +5,13 @@ import { HttpError } from "../errors";
 import { decryptCredential } from "../security/secrets-vault";
 import type { GeminiConfigMetadata } from "../types";
 
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 export const SUPPORTED_GEMINI_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
-  "gemini-2.0-flash",
+  "gemini-3.5-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-3.8-flash",
 ];
 
 const BLOCKED_IMAGE_GEN_PATTERN = /(imagen|image-generation|veo)/i;
@@ -311,6 +313,18 @@ export function classifyGeminiError(err: unknown): GeminiClassifiedError {
     });
   }
 
+  if (status === 503 || lower.includes("unavailable") || lower.includes("high demand")) {
+    console.warn("[punchpay-gemini]", status, "provider_unavailable");
+    return new GeminiClassifiedError({
+      status: 503,
+      code: "provider_unavailable",
+      message: "Selected Gemini model is temporarily busy (HTTP 503). Retry or choose gemini-3.5-flash.",
+      retryAfterMs: 1200,
+      retryable: true,
+    });
+  }
+
+  console.warn("[punchpay-gemini]", status || "unknown", lower.slice(0, 140));
   return new GeminiClassifiedError({
     status: status >= 400 && status < 600 ? status : 502,
     code: "provider_unavailable",

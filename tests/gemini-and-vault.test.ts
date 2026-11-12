@@ -159,7 +159,7 @@ describe("Encrypted credential vault & Gemini configuration", () => {
     const saved = await repo.saveServerCredential({
       provider: "gemini",
       encrypted_payload: encrypted,
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       updated_by: "admin-1",
     });
     expect(saved.encrypted_payload).not.toContain(sampleKey);
@@ -201,7 +201,7 @@ describe("Encrypted credential vault & Gemini configuration", () => {
     });
     const okRes = await testGeminiConnection({
       apiKey: "AIzaValidKeyMock123",
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       clientFactory: validFactory,
     });
     expect(okRes.ok).toBe(true);
@@ -218,7 +218,7 @@ describe("Encrypted credential vault & Gemini configuration", () => {
     });
     const badRes = await testGeminiConnection({
       apiKey: "bad-key-1234",
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       clientFactory: invalidKeyFactory,
     });
     expect(badRes.ok).toBe(false);
@@ -354,7 +354,7 @@ describe("Gemini AI inspection, image quality checks & 3-tier fallback", () => {
         task: makeTask(),
         beforeImages: [{ record: makeEvidence("b1", "before", img), bytes: img }],
         afterImages: [{ record: makeEvidence("a1", "after", await makePng(120, 120, 120)), bytes: img }],
-        aiOverride: { provider: "gemini", apiKey: "AIzaMock", model: "gemini-2.5-flash" },
+        aiOverride: { provider: "gemini", apiKey: "AIzaMock", model: "gemini-3.6-flash" },
         geminiFactory: malformedFactory,
       })
     ).rejects.toThrow(/non-JSON/i);

@@ -263,7 +263,7 @@ test("Admin AI configuration UI encrypts, isolates, tests, replaces, and removes
     const res = await fetch("/api/settings/ai", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKey: "AIzaHomeownerBlockedKey123", model: "gemini-2.5-flash" }),
+      body: JSON.stringify({ apiKey: "AIzaHomeownerBlockedKey123", model: "gemini-3.6-flash" }),
     });
     return res.status;
   });
