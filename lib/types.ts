@@ -1,4 +1,4 @@
-export type UserRole = "homeowner" | "contractor";
+export type UserRole = "homeowner" | "contractor" | "admin";
 
 export type ProjectStatus = "ACTIVE" | "COMPLETED" | "CANCELLED";
 
@@ -98,6 +98,14 @@ export interface AICriterionCheck {
   observation: string;
 }
 
+export type AIProviderType = "ollama" | "gemini" | "anthropic" | "guided";
+
+export type AIAnalysisSource =
+  | "gemini_live"
+  | "ollama_local"
+  | "anthropic_live"
+  | "guided_checklist";
+
 export interface AIStructuredFindings {
   overall_assessment: "appears_satisfied" | "concerns_identified" | "insufficient_evidence";
   summary: string;
@@ -111,21 +119,48 @@ export interface AIStructuredFindings {
   recommended_next_steps: string[];
   suggested_outcome: AIRecommendation;
   limitations_and_uncertainty: string[];
+  is_genuine_ai?: boolean;
+  analysis_source?: AIAnalysisSource;
+  analyzed_evidence_ids?: string[];
+  image_hashes?: string[];
+  input_fingerprint?: string;
+  quality_warnings?: string[];
 }
 
 export type PaymentMode = "paypal_sandbox" | "simulation";
-
-export type AIProviderType = "ollama" | "gemini" | "anthropic";
 
 export interface AIReviewRecord {
   id: string;
   task_id: string;
   model: string;
   provider: AIProviderType;
+  analysis_source: AIAnalysisSource;
+  is_genuine_ai: boolean;
+  analyzed_evidence_ids: string[];
+  image_hashes: string[];
+  input_fingerprint: string | null;
   structured_findings: AIStructuredFindings;
   recommendation: AIRecommendation;
   review_version: number;
   created_at: string;
+}
+
+export interface ServerCredentialRecord {
+  provider: "gemini";
+  encrypted_payload: string;
+  model: string | null;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+export interface GeminiConfigMetadata {
+  configured: boolean;
+  source: "admin_vault" | "environment" | "none";
+  model: string;
+  updatedAt: string | null;
+  cooldownActive: boolean;
+  cooldownReason: string | null;
+  supportedModels: string[];
 }
 
 export interface PaymentRecord {
@@ -220,6 +255,8 @@ export interface SystemConfigStatus {
     configured: boolean;
     provider: AIProviderType | null;
     model: string | null;
+    activeTier?: AIAnalysisSource | "guided_fallback";
+    gemini?: GeminiConfigMetadata;
     ollama?: {
       configured: boolean;
       reachable: boolean;

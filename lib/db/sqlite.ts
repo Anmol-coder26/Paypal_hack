@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { HttpError } from "../errors";
 import { assertPaymentTransition, assertWorkTransition } from "../payments/state-machine";
 import type {
+  AIAnalysisSource,
   AIProviderType,
   AIReviewRecord,
   DecisionRecord,
@@ -18,6 +19,7 @@ import type {
   Project,
   ProjectBundle,
   RepairTask,
+  ServerCredentialRecord,
   TaskBundle,
   UserRole,
   WorkStatus,
@@ -45,6 +47,13 @@ export const DEMO_ACCOUNTS = {
     email: "contractor@punchpay.demo",
     role: "contractor" as const,
     password: "punchpay-demo-contractor",
+  },
+  admin: {
+    id: "33333333-3333-4333-8333-333333333303",
+    name: "System Administrator",
+    email: "admin@punchpay.demo",
+    role: "admin" as const,
+    password: "punchpay-demo-admin",
   },
 };
 
@@ -95,9 +104,17 @@ export class SqliteRepository implements PunchPayRepository {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         email TEXT NOT NULL UNIQUE,
-        role TEXT NOT NULL CHECK (role IN ('homeowner', 'contractor')),
+        role TEXT NOT NULL CHECK (role IN ('homeowner', 'contractor', 'admin')),
         password_hash TEXT NOT NULL,
         created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS server_credentials (
+        provider TEXT PRIMARY KEY,
+        encrypted_payload TEXT NOT NULL,
+        model TEXT,
+        updated_by TEXT,
+        updated_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS sessions (
@@ -158,6 +175,11 @@ export class SqliteRepository implements PunchPayRepository {
         task_id TEXT NOT NULL REFERENCES repair_tasks(id) ON DELETE CASCADE,
         model TEXT NOT NULL,
         provider TEXT NOT NULL,
+        analysis_source TEXT NOT NULL DEFAULT 'gemini_live',
+        is_genuine_ai INTEGER NOT NULL DEFAULT 1,
+        analyzed_evidence_ids TEXT NOT NULL DEFAULT '[]',
+        image_hashes TEXT NOT NULL DEFAULT '[]',
+        input_fingerprint TEXT,
         structured_findings TEXT NOT NULL,
         recommendation TEXT NOT NULL,
         review_version INTEGER NOT NULL,
@@ -235,6 +257,52 @@ export class SqliteRepository implements PunchPayRepository {
     `);
 
     // Migrate existing local SQLite databases cleanly without dropping user data
+    const profileTableSql = this.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'profiles'")
+      .get() as { sql?: string } | undefined;
+    if (profileTableSql?.sql && !profileTableSql.sql.includes("'admin'")) {
+      this.db.exec("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;");
+      try {
+        this.db.exec(`
+          CREATE TABLE profiles_v22 (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            role TEXT NOT NULL CHECK (role IN ('homeowner', 'contractor', 'admin')),
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          );
+          INSERT INTO profiles_v22 SELECT id, name, email, role, password_hash, created_at FROM profiles;
+          DROP TABLE profiles;
+          ALTER TABLE profiles_v22 RENAME TO profiles;
+          COMMIT;
+        `);
+      } catch (err) {
+        this.db.exec("ROLLBACK;");
+        throw err;
+      } finally {
+        this.db.exec("PRAGMA foreign_keys = ON;");
+      }
+    }
+
+    const aiCols = this.db.prepare("PRAGMA table_info(ai_reviews)").all() as Array<{ name: string }>;
+    const existingAi = new Set(aiCols.map((c) => c.name));
+    if (!existingAi.has("analysis_source")) {
+      this.db.exec("ALTER TABLE ai_reviews ADD COLUMN analysis_source TEXT NOT NULL DEFAULT 'gemini_live'");
+    }
+    if (!existingAi.has("is_genuine_ai")) {
+      this.db.exec("ALTER TABLE ai_reviews ADD COLUMN is_genuine_ai INTEGER NOT NULL DEFAULT 1");
+    }
+    if (!existingAi.has("analyzed_evidence_ids")) {
+      this.db.exec("ALTER TABLE ai_reviews ADD COLUMN analyzed_evidence_ids TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!existingAi.has("image_hashes")) {
+      this.db.exec("ALTER TABLE ai_reviews ADD COLUMN image_hashes TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!existingAi.has("input_fingerprint")) {
+      this.db.exec("ALTER TABLE ai_reviews ADD COLUMN input_fingerprint TEXT");
+    }
+
     const cols = this.db.prepare("PRAGMA table_info(payment_records)").all() as Array<{ name: string }>;
     const existing = new Set(cols.map((c) => c.name));
     if (!existing.has("payment_mode")) {
@@ -278,6 +346,14 @@ export class SqliteRepository implements PunchPayRepository {
       DEMO_ACCOUNTS.contractor.email,
       DEMO_ACCOUNTS.contractor.role,
       hashPassword(DEMO_ACCOUNTS.contractor.password),
+      ts
+    );
+    stmt.run(
+      DEMO_ACCOUNTS.admin.id,
+      DEMO_ACCOUNTS.admin.name,
+      DEMO_ACCOUNTS.admin.email,
+      DEMO_ACCOUNTS.admin.role,
+      hashPassword(DEMO_ACCOUNTS.admin.password),
       ts
     );
     this.seeded = true;
@@ -405,16 +481,35 @@ export class SqliteRepository implements PunchPayRepository {
       )
       .all(taskId) as Array<Record<string, unknown>>;
 
-    const reviews: AIReviewRecord[] = rawReviews.map((r) => ({
-      id: String(r.id),
-      task_id: String(r.task_id),
-      model: String(r.model),
-      provider: r.provider as AIProviderType,
-      structured_findings: JSON.parse(String(r.structured_findings)),
-      recommendation: r.recommendation as AIReviewRecord["recommendation"],
-      review_version: Number(r.review_version),
-      created_at: String(r.created_at),
-    }));
+    const reviews: AIReviewRecord[] = rawReviews.map((r) => {
+      const parsedFindings = JSON.parse(String(r.structured_findings));
+      const fallbackSource: AIAnalysisSource =
+        r.provider === "ollama"
+          ? "ollama_local"
+          : r.provider === "anthropic"
+          ? "anthropic_live"
+          : r.provider === "guided"
+          ? "guided_checklist"
+          : "gemini_live";
+      return {
+        id: String(r.id),
+        task_id: String(r.task_id),
+        model: String(r.model),
+        provider: r.provider as AIProviderType,
+        analysis_source: (r.analysis_source
+          ? String(r.analysis_source)
+          : fallbackSource) as AIAnalysisSource,
+        is_genuine_ai:
+          r.is_genuine_ai !== undefined ? Boolean(r.is_genuine_ai) : r.provider !== "guided",
+        analyzed_evidence_ids: JSON.parse(String(r.analyzed_evidence_ids || "[]")),
+        image_hashes: JSON.parse(String(r.image_hashes || "[]")),
+        input_fingerprint: r.input_fingerprint ? String(r.input_fingerprint) : null,
+        structured_findings: parsedFindings,
+        recommendation: r.recommendation as AIReviewRecord["recommendation"],
+        review_version: Number(r.review_version),
+        created_at: String(r.created_at),
+      };
+    });
 
     const decisions = this.db
       .prepare("SELECT * FROM decisions WHERE task_id = ? ORDER BY created_at DESC")
@@ -490,6 +585,7 @@ export class SqliteRepository implements PunchPayRepository {
 
   async listProjectsForUser(user: Profile): Promise<ProjectBundle[]> {
     await this.ensureSeedProfiles();
+    if (user.role === "admin") return [];
     const col = user.role === "homeowner" ? "p.homeowner_id" : "p.contractor_id";
     const rows = this.db
       .prepare(
@@ -887,6 +983,11 @@ export class SqliteRepository implements PunchPayRepository {
     task_id: string;
     model: string;
     provider: AIProviderType;
+    analysis_source: AIAnalysisSource;
+    is_genuine_ai: boolean;
+    analyzed_evidence_ids: string[];
+    image_hashes: string[];
+    input_fingerprint: string | null;
     structured_findings: AIReviewRecord["structured_findings"];
     recommendation: AIReviewRecord["recommendation"];
   }): Promise<AIReviewRecord> {
@@ -898,14 +999,22 @@ export class SqliteRepository implements PunchPayRepository {
     const created_at = nowIso();
     this.db
       .prepare(
-        `INSERT INTO ai_reviews (id, task_id, model, provider, structured_findings, recommendation, review_version, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO ai_reviews (
+           id, task_id, model, provider, analysis_source, is_genuine_ai,
+           analyzed_evidence_ids, image_hashes, input_fingerprint,
+           structured_findings, recommendation, review_version, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
         input.task_id,
         input.model,
         input.provider,
+        input.analysis_source,
+        input.is_genuine_ai ? 1 : 0,
+        JSON.stringify(input.analyzed_evidence_ids),
+        JSON.stringify(input.image_hashes),
+        input.input_fingerprint,
         JSON.stringify(input.structured_findings),
         input.recommendation,
         nextVersion,
@@ -916,11 +1025,54 @@ export class SqliteRepository implements PunchPayRepository {
       task_id: input.task_id,
       model: input.model,
       provider: input.provider,
+      analysis_source: input.analysis_source,
+      is_genuine_ai: input.is_genuine_ai,
+      analyzed_evidence_ids: input.analyzed_evidence_ids,
+      image_hashes: input.image_hashes,
+      input_fingerprint: input.input_fingerprint,
       structured_findings: input.structured_findings,
       recommendation: input.recommendation,
       review_version: nextVersion,
       created_at,
     };
+  }
+
+  async getServerCredential(provider: "gemini"): Promise<ServerCredentialRecord | null> {
+    const row = this.db
+      .prepare("SELECT * FROM server_credentials WHERE provider = ?")
+      .get(provider) as ServerCredentialRecord | undefined;
+    return row ?? null;
+  }
+
+  async saveServerCredential(input: {
+    provider: "gemini";
+    encrypted_payload: string;
+    model: string | null;
+    updated_by: string;
+  }): Promise<ServerCredentialRecord> {
+    const updated_at = nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO server_credentials (provider, encrypted_payload, model, updated_by, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(provider) DO UPDATE SET
+           encrypted_payload = excluded.encrypted_payload,
+           model = excluded.model,
+           updated_by = excluded.updated_by,
+           updated_at = excluded.updated_at`
+      )
+      .run(input.provider, input.encrypted_payload, input.model, input.updated_by, updated_at);
+    return {
+      provider: input.provider,
+      encrypted_payload: input.encrypted_payload,
+      model: input.model,
+      updated_by: input.updated_by,
+      updated_at,
+    };
+  }
+
+  async deleteServerCredential(provider: "gemini"): Promise<void> {
+    this.db.prepare("DELETE FROM server_credentials WHERE provider = ?").run(provider);
   }
 
   async claimPaymentState(

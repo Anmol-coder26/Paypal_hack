@@ -83,7 +83,25 @@ export async function POST(
       },
     });
 
-    return Response.json({ evidence: saved, workStatus: nextWork }, { status: 201 });
+    const refreshed = await repo.getTaskBundle(id);
+    let qualityWarnings: string[] = [];
+    if (refreshed) {
+      const { assessEvidenceQuality } = await import("@/lib/ai/provider");
+      const load = async (evType: "before" | "after") => {
+        const rows = refreshed.evidence.filter((e) => e.evidence_type === evType).slice(0, 2);
+        const out = [];
+        for (const r of rows) {
+          const loaded = await repo.readEvidenceBytes(r.image_storage_path);
+          if (loaded) out.push({ record: r, bytes: loaded.bytes });
+        }
+        return out;
+      };
+      const [bImgs, aImgs] = await Promise.all([load("before"), load("after")]);
+      const quality = await assessEvidenceQuality(bImgs, aImgs);
+      qualityWarnings = quality.warnings;
+    }
+
+    return Response.json({ evidence: saved, workStatus: nextWork, qualityWarnings }, { status: 201 });
   } catch (err) {
     return responseError(err);
   }

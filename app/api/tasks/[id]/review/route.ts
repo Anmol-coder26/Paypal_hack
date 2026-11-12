@@ -1,11 +1,11 @@
-import { inspectTaskEvidence } from "@/lib/ai/provider";
+import { inspectTaskEvidenceWithFallback } from "@/lib/ai/provider";
 import { requireCurrentUser } from "@/lib/auth/session";
 import { getRepo } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { responseError } from "@/lib/http";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -19,6 +19,9 @@ export async function POST(
     }
     const task = await repo.getTaskBundle(id);
     if (!task) throw new HttpError(404, "Task not found");
+
+    const body = (await request.json().catch(() => ({}))) as { retryLiveAI?: boolean } | null;
+    const retryLiveAI = Boolean(body?.retryLiveAI);
 
     const beforeRecords = task.evidence.filter((e) => e.evidence_type === "before").slice(0, 2);
     const afterRecords = task.evidence.filter((e) => e.evidence_type === "after").slice(0, 2);
@@ -44,11 +47,44 @@ export async function POST(
       loadBytes(afterRecords),
     ]);
 
-    const result = await inspectTaskEvidence({ task, beforeImages, afterImages });
+    const result = await inspectTaskEvidenceWithFallback({
+      task,
+      beforeImages,
+      afterImages,
+      retryLiveAI,
+    });
+
+    if (result.outcome === "cached") {
+      return Response.json({
+        status: "cached",
+        cached: true,
+        review: result.cachedReview,
+        notice: result.notice,
+        qualityWarnings: result.qualityWarnings,
+      });
+    }
+
+    if (result.outcome === "guided_fallback") {
+      return Response.json({
+        status: "guided_fallback",
+        fallback: true,
+        activeTier: result.activeTier,
+        reasonCode: result.reasonCode,
+        message: result.message,
+        qualityWarnings: result.qualityWarnings,
+        template: result.template,
+      });
+    }
+
     const review = await repo.saveAIReview({
       task_id: task.id,
       model: result.model,
       provider: result.provider,
+      analysis_source: result.analysisSource,
+      is_genuine_ai: true,
+      analyzed_evidence_ids: result.evidenceIds,
+      image_hashes: result.imageHashes,
+      input_fingerprint: result.inputFingerprint,
       structured_findings: result.findings,
       recommendation: result.recommendation,
     });
@@ -65,13 +101,20 @@ export async function POST(
       safe_metadata: {
         provider: result.provider,
         model: result.model,
+        analysis_source: result.analysisSource,
+        is_genuine_ai: true,
         version: review.review_version,
         assessment: result.findings.overall_assessment,
         recommendation: result.recommendation,
       },
     });
 
-    return Response.json({ review });
+    return Response.json({
+      status: "completed",
+      review,
+      fallbackNotice: result.fallbackNotice,
+      qualityWarnings: result.qualityWarnings,
+    });
   } catch (err) {
     return responseError(err);
   }

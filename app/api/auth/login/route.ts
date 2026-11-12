@@ -9,7 +9,7 @@ import { responseError } from "@/lib/http";
 const LoginSchema = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("demo"),
-    role: z.enum(["homeowner", "contractor"]),
+    role: z.enum(["homeowner", "contractor", "admin"]),
   }),
   z.object({
     mode: z.literal("password"),

@@ -2,13 +2,14 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { cookies } from "next/headers";
+import { DEFAULT_GEMINI_MODEL, getGeminiPublicMetadata } from "../ai/gemini";
 import { getOllamaConfig, probeOllamaHealth } from "../ai/provider";
 import { getRepo, isSupabaseConfigured } from "../db";
 import { DEMO_ACCOUNTS, hashPassword, verifyPassword } from "../db/sqlite";
 import { HttpError } from "../errors";
 import { getPayPalClientConfig } from "../payments/paypal-client";
 import { getConfiguredPaymentMode } from "../payments/simulator";
-import type { AIProviderType, Profile, SystemConfigStatus, UserRole } from "../types";
+import type { AIAnalysisSource, AIProviderType, Profile, SystemConfigStatus, UserRole } from "../types";
 
 export const SESSION_COOKIE_NAME = "punchpay_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
@@ -172,13 +173,13 @@ export function getSystemConfigStatus(): SystemConfigStatus {
     aiModel = ollamaCfg.model;
   } else if (preferred === "gemini" && geminiKey) {
     aiProvider = "gemini";
-    aiModel = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    aiModel = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
   } else if (preferred === "anthropic" && anthropicKey) {
     aiProvider = "anthropic";
     aiModel = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
   } else if (geminiKey) {
     aiProvider = "gemini";
-    aiModel = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    aiModel = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
   } else if (anthropicKey) {
     aiProvider = "anthropic";
     aiModel = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
@@ -216,16 +217,47 @@ export function getSystemConfigStatus(): SystemConfigStatus {
 
 export async function getLiveSystemConfigStatus(): Promise<SystemConfigStatus> {
   const base = getSystemConfigStatus();
-  if (base.ai.provider === "gemini" || base.ai.provider === "anthropic") {
-    return base;
+  const [geminiMeta, ollama] = await Promise.all([
+    getGeminiPublicMetadata(),
+    probeOllamaHealth(),
+  ]);
+
+  let configured = false;
+  let provider: AIProviderType | null = null;
+  let model: string | null = null;
+  let activeTier: AIAnalysisSource | "guided_fallback" = "guided_fallback";
+
+  if (geminiMeta.configured && !geminiMeta.cooldownActive) {
+    configured = true;
+    provider = "gemini";
+    model = geminiMeta.model;
+    activeTier = "gemini_live";
+  } else if (ollama.reachable && ollama.modelAvailable) {
+    configured = true;
+    provider = "ollama";
+    model = ollama.model;
+    activeTier = "ollama_local";
+  } else if (process.env.ANTHROPIC_API_KEY?.trim()) {
+    configured = true;
+    provider = "anthropic";
+    model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
+    activeTier = "anthropic_live";
+  } else if (geminiMeta.configured) {
+    // Key exists, but currently in quota cooldown
+    configured = false;
+    provider = "gemini";
+    model = geminiMeta.model;
+    activeTier = "guided_fallback";
   }
-  const ollama = await probeOllamaHealth();
+
   return {
     ...base,
     ai: {
-      configured: ollama.reachable && ollama.modelAvailable,
-      provider: ollama.reachable || ollama.configured ? "ollama" : base.ai.provider,
-      model: ollama.reachable || ollama.configured ? ollama.model : base.ai.model,
+      configured,
+      provider,
+      model,
+      activeTier,
+      gemini: geminiMeta,
       ollama,
     },
   };

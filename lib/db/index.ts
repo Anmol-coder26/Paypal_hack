@@ -21,3 +21,10 @@ export function getRepo(): PunchPayRepository {
   }
   return singleton;
 }
+
+export function resetRepoForTests(): void {
+  if (singleton && singleton instanceof SqliteRepository) {
+    singleton.close();
+  }
+  singleton = null;
+}

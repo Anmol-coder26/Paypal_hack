@@ -1,15 +1,33 @@
+import crypto from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
+import sharp from "sharp";
 import { z } from "zod";
 import { HttpError } from "../errors";
 import { formatMinorUnits } from "../payments/state-machine";
 import type {
+  AIAnalysisSource,
   AIProviderType,
   AIReviewRecord,
   AIStructuredFindings,
   EvidenceRecord,
   TaskBundle,
 } from "../types";
-import { formatKnowledgeForPrompt, retrieveRepairKnowledge } from "./knowledge";
+import {
+  clearGeminiCooldown,
+  GEMINI_EVIDENCE_RESPONSE_SCHEMA,
+  generateGeminiStructuredContent,
+  getGeminiCooldownState,
+  resolveGeminiCredential,
+  setGeminiCooldown,
+  type GeminiErrorCode,
+  type GeminiFactory,
+  GeminiClassifiedError,
+} from "./gemini";
+import {
+  formatKnowledgeForPrompt,
+  getGuidedChecklistTemplate,
+  retrieveRepairKnowledge,
+} from "./knowledge";
 
 export const ScopeSuggestionSchema = z.object({
   improved_description: z.string().min(5),
@@ -52,6 +70,7 @@ export const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 export const OLLAMA_DEFAULT_MODEL = "qwen2.5vl:3b";
 const OLLAMA_TIMEOUT_MS = 45_000;
 const MAX_OLLAMA_IMAGE_BYTES = 4 * 1024 * 1024;
+const AI_INFERENCE_MAX_EDGE = 1600;
 
 export function sanitizeOllamaBaseUrl(raw?: string): string {
   const candidate = (raw || OLLAMA_DEFAULT_BASE_URL).trim();
@@ -145,6 +164,58 @@ export type ActiveAIProviderConfig =
   | { provider: "gemini"; apiKey: string; model: string }
   | { provider: "anthropic"; apiKey: string; model: string };
 
+export async function resolveActiveAIProvider(
+  override?: ActiveAIProviderConfig
+): Promise<ActiveAIProviderConfig> {
+  if (override) return override;
+  const preferred = (process.env.AI_PROVIDER || "").trim().toLowerCase();
+  const geminiCred = await resolveGeminiCredential();
+
+  if (preferred === "ollama") {
+    const ol = getOllamaConfig();
+    return { provider: "ollama", baseUrl: ol.baseUrl, model: ol.model };
+  }
+  if (preferred === "gemini" && geminiCred.configured && geminiCred.apiKey) {
+    return {
+      provider: "gemini",
+      apiKey: geminiCred.apiKey,
+      model: geminiCred.model,
+    };
+  }
+  if (preferred === "anthropic" && process.env.ANTHROPIC_API_KEY) {
+    return {
+      provider: "anthropic",
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
+    };
+  }
+
+  if (geminiCred.configured && geminiCred.apiKey) {
+    return {
+      provider: "gemini",
+      apiKey: geminiCred.apiKey,
+      model: geminiCred.model,
+    };
+  }
+  if (process.env.ANTHROPIC_API_KEY) {
+    return {
+      provider: "anthropic",
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
+    };
+  }
+  if (process.env.OLLAMA_MODEL || process.env.OLLAMA_BASE_URL) {
+    const ol = getOllamaConfig();
+    return { provider: "ollama", baseUrl: ol.baseUrl, model: ol.model };
+  }
+
+  throw new HttpError(
+    503,
+    "No AI Vision provider is configured. Add a Gemini API key in Settings (or start local Ollama)."
+  );
+}
+
+/** Synchronous compatibility helper for callers without vault lookups. */
 export function getActiveAIProvider(override?: ActiveAIProviderConfig): ActiveAIProviderConfig {
   if (override) return override;
   const preferred = (process.env.AI_PROVIDER || "").trim().toLowerCase();
@@ -189,8 +260,125 @@ export function getActiveAIProvider(override?: ActiveAIProviderConfig): ActiveAI
 
   throw new HttpError(
     503,
-    "No AI Vision provider is configured. Start local Ollama (AI_PROVIDER=ollama with qwen2.5vl:3b) or add GEMINI_API_KEY / ANTHROPIC_API_KEY in .env.local."
+    "No AI Vision provider is configured. Add a Gemini API key in Settings or start local Ollama."
   );
+}
+
+export async function assessEvidenceQuality(
+  beforeImages: Array<{ record: EvidenceRecord; bytes: Buffer }>,
+  afterImages: Array<{ record: EvidenceRecord; bytes: Buffer }>
+): Promise<{
+  warnings: string[];
+  beforeHashes: string[];
+  afterHashes: string[];
+  allHashes: string[];
+  evidenceIds: string[];
+}> {
+  const warnings: string[] = [];
+  const beforeHashes: string[] = [];
+  const afterHashes: string[] = [];
+  const evidenceIds: string[] = [];
+
+  if (!beforeImages.length) {
+    warnings.push("No BEFORE photograph attached for baseline comparison.");
+  }
+  if (!afterImages.length) {
+    warnings.push("No AFTER photograph attached showing completed repair work.");
+  }
+
+  const checkOne = async (
+    item: { record: EvidenceRecord; bytes: Buffer },
+    stage: "before" | "after"
+  ) => {
+    const hash = crypto.createHash("sha256").update(item.bytes).digest("hex");
+    if (stage === "before") beforeHashes.push(hash);
+    else afterHashes.push(hash);
+    evidenceIds.push(item.record.id);
+
+    try {
+      const meta = await sharp(item.bytes).metadata();
+      const width = meta.width ?? item.record.width ?? 0;
+      const height = meta.height ?? item.record.height ?? 0;
+      if (width > 0 && height > 0 && (width < 240 || height < 180)) {
+        warnings.push(
+          `${stage.toUpperCase()} image resolution (${width}x${height}) is low; small defects may not be clear.`
+        );
+      }
+      const stats = await sharp(item.bytes).greyscale().stats();
+      const stdev = stats.channels[0]?.stdev ?? 25;
+      if (stdev < 4.5) {
+        warnings.push(
+          `${stage.toUpperCase()} image has very low visual contrast or uniform blur; a sharper framing may be needed.`
+        );
+      }
+    } catch {
+      warnings.push(`${stage.toUpperCase()} image metadata could not be inspected locally.`);
+    }
+  };
+
+  for (const b of beforeImages) await checkOne(b, "before");
+  for (const a of afterImages) await checkOne(a, "after");
+
+  const overlap = beforeHashes.some((h) => afterHashes.includes(h));
+  if (overlap) {
+    warnings.push(
+      "Before and After uploads have identical SHA-256 image hashes; verify both stages show distinct photographs."
+    );
+  }
+
+  return {
+    warnings: Array.from(new Set(warnings)),
+    beforeHashes,
+    afterHashes,
+    allHashes: [...beforeHashes, ...afterHashes],
+    evidenceIds,
+  };
+}
+
+async function prepareImageForAI(bytes: Buffer, mimeType: string): Promise<{ bytes: Buffer; mimeType: string }> {
+  try {
+    const meta = await sharp(bytes).metadata();
+    const w = meta.width ?? 0;
+    const h = meta.height ?? 0;
+    if (Math.max(w, h) <= AI_INFERENCE_MAX_EDGE && bytes.byteLength <= 1_800_000) {
+      return { bytes, mimeType };
+    }
+    const pipeline = sharp(bytes).rotate().resize({
+      width: AI_INFERENCE_MAX_EDGE,
+      height: AI_INFERENCE_MAX_EDGE,
+      fit: "inside",
+      withoutEnlargement: true,
+    });
+    const out =
+      mimeType === "image/png"
+        ? await pipeline.png().toBuffer()
+        : mimeType === "image/webp"
+        ? await pipeline.webp({ quality: 86 }).toBuffer()
+        : await pipeline.jpeg({ quality: 86, mozjpeg: true }).toBuffer();
+    return { bytes: out, mimeType };
+  } catch {
+    return { bytes, mimeType };
+  }
+}
+
+export function computeInspectionFingerprint(opts: {
+  task: Pick<TaskBundle, "title" | "description" | "acceptance_criteria" | "contractor_notes">;
+  beforeHashes: string[];
+  afterHashes: string[];
+}): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        title: opts.task.title,
+        description: opts.task.description,
+        criteria: opts.task.acceptance_criteria,
+        notes: opts.task.contractor_notes || "",
+        beforeHashes: opts.beforeHashes,
+        afterHashes: opts.afterHashes,
+      })
+    )
+    .digest("hex");
 }
 
 async function callOllamaChatJSON(opts: {
@@ -223,12 +411,8 @@ async function callOllamaChatJSON(opts: {
         ...(encodedImages.length ? { images: encodedImages } : {}),
       },
     ],
+    format: opts.formatSchema ?? "json",
   };
-  if (opts.formatSchema) {
-    bodyPayload.format = opts.formatSchema;
-  } else {
-    bodyPayload.format = "json";
-  }
 
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -250,7 +434,7 @@ async function callOllamaChatJSON(opts: {
         if (res.status === 404 || msg.toLowerCase().includes("not found")) {
           throw new HttpError(
             503,
-            `Ollama model '${opts.model}' is not installed locally. Run 'ollama pull ${opts.model}' or review evidence manually.`
+            `Ollama model '${opts.model}' is not installed locally. Run 'ollama pull ${opts.model}' or use Guided Review.`
           );
         }
         if (res.status >= 500 && attempt === 0) {
@@ -275,66 +459,18 @@ async function callOllamaChatJSON(opts: {
       if (name === "TimeoutError" || name === "AbortError") {
         throw new HttpError(
           504,
-          `Local Ollama model '${opts.model}' timed out after 45s on available hardware. Consider a lighter model or Manual Checklist Review.`
+          `Local Ollama model '${opts.model}' timed out after 45s on available hardware. Switch to Guided Review.`
         );
       }
       throw new HttpError(
         503,
-        `Local Ollama server is not reachable at ${baseUrl}. Start Ollama ('ollama serve') or use Manual Checklist Review.`
+        `Local Ollama server is not reachable at ${baseUrl}. Use Guided Review or verify Ollama is running.`
       );
     }
   }
   throw lastErr instanceof Error
     ? lastErr
     : new HttpError(503, "Local Ollama request failed.");
-}
-
-async function callGeminiJSON(opts: {
-  apiKey: string;
-  model: string;
-  systemInstruction: string;
-  parts: Array<
-    | { text: string }
-    | { inlineData: { mimeType: string; data: string } }
-  >;
-}): Promise<{ text: string; model: string }> {
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    opts.model
-  )}:generateContent?key=${encodeURIComponent(opts.apiKey)}`;
-
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: opts.systemInstruction }] },
-      contents: [{ role: "user", parts: opts.parts }],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: "application/json",
-      },
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
-
-  const payload = (await res.json().catch(() => null)) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    error?: { message?: string; status?: string };
-  } | null;
-
-  if (!res.ok) {
-    const msg = payload?.error?.message || `Gemini API returned ${res.status}`;
-    if (res.status === 429) throw new HttpError(429, `Gemini rate limit: ${msg}`);
-    if (res.status === 401 || res.status === 403) {
-      throw new HttpError(503, `Gemini authentication failed: ${msg}`);
-    }
-    throw new HttpError(502, `Gemini API error: ${msg}`);
-  }
-
-  const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    throw new HttpError(502, "Gemini returned an empty response");
-  }
-  return { text, model: opts.model };
 }
 
 async function callAnthropicJSON(opts: {
@@ -429,9 +565,9 @@ const EVIDENCE_JSON_SCHEMA = {
 
 export async function generateScopeSuggestions(
   input: { title: string; description: string },
-  opts?: { aiOverride?: ActiveAIProviderConfig; fetchImpl?: typeof fetch }
+  opts?: { aiOverride?: ActiveAIProviderConfig; fetchImpl?: typeof fetch; geminiFactory?: GeminiFactory }
 ): Promise<z.infer<typeof ScopeSuggestionSchema>> {
-  const cfg = getActiveAIProvider(opts?.aiOverride);
+  const cfg = await resolveActiveAIProvider(opts?.aiOverride);
   const guidelines = formatKnowledgeForPrompt(
     retrieveRepairKnowledge(input.title, input.description)
   );
@@ -457,11 +593,12 @@ Return ONLY valid JSON matching:
           fetchImpl: opts?.fetchImpl,
         })
       : cfg.provider === "gemini"
-      ? await callGeminiJSON({
+      ? await generateGeminiStructuredContent({
           apiKey: cfg.apiKey,
           model: cfg.model,
           systemInstruction: systemPrompt,
           parts: [{ text: userPrompt }],
+          clientFactory: opts?.geminiFactory,
         })
       : await callAnthropicJSON({
           apiKey: cfg.apiKey,
@@ -477,45 +614,32 @@ Return ONLY valid JSON matching:
   return parsed.data;
 }
 
-export async function inspectTaskEvidence(opts: {
+function buildInspectionPrompts(opts: {
   task: TaskBundle;
-  beforeImages: Array<{ record: EvidenceRecord; bytes: Buffer }>;
-  afterImages: Array<{ record: EvidenceRecord; bytes: Buffer }>;
-  aiOverride?: ActiveAIProviderConfig;
-  fetchImpl?: typeof fetch;
-}): Promise<{
-  provider: AIProviderType;
-  model: string;
-  findings: AIStructuredFindings;
-  recommendation: AIReviewRecord["recommendation"];
-}> {
-  if (!opts.beforeImages.length || !opts.afterImages.length) {
-    throw new HttpError(
-      409,
-      "Both before and after photographs must be uploaded before running AI inspection."
-    );
-  }
-
-  const cfg = getActiveAIProvider(opts.aiOverride);
+  beforeCount: number;
+  afterCount: number;
+  qualityWarnings: string[];
+}) {
   const knowledgeText = formatKnowledgeForPrompt(
     retrieveRepairKnowledge(opts.task.title, opts.task.description)
   );
 
   const systemPrompt = `You are PunchPay's cautious visual repair inspection assistant for homeowners.
-You NEVER approve, capture, or void payments; you only describe what is visible in the submitted BEFORE and AFTER photographs relative to the agreed acceptance criteria.
+You NEVER approve, capture, or void payments; you only evaluate visible evidence in the submitted BEFORE and AFTER photographs relative to the agreed acceptance criteria.
 
-Tone & Evidence Rules:
-1. Write plain, neutral, concise English (no promotional adjectives, no "100% verified", no "perfect").
-2. Specify whether each observation comes from the BEFORE or AFTER photo and distinguish direct observation from inference.
-3. NEVER invent physical measurements (millimeters/inches) or uncalibrated confidence percentages.
-4. Use the category inspection guidelines ONLY as a checklist of things to look for — never assume a category passes or fails until you check the actual pixels.
-5. Evaluate every agreed acceptance criterion individually as "satisfied", "unmet", or "unverifiable".
-6. If framing, distance, darkness, blur, glare, or cropping prevents confident comparison, set views_comparable to "partly" or "no", mark uncertain criteria "unverifiable", and explain what photos cannot confirm in limitations_and_uncertainty.
+Writing & Evidence Rules:
+1. Write crisp, plain, neutral English (no marketing claims, no "100% complete", no "perfect", no "excellent").
+2. Limit summary to ~20 words and each observation to ~25 words.
+3. For each observation in visible_observations, state which image (BEFORE or AFTER) supports it, what is visibly present, and which acceptance criterion it relates to.
+4. NEVER invent physical measurements (millimeters/inches) or calibrated confidence percentages.
+5. Evaluate EVERY agreed acceptance criterion in criteria_checks as "satisfied", "unmet", or "unverifiable". Never omit a criterion.
+6. If blur, cropping, glare, missing views, or identical photos prevent verification, set views_comparable to "partly" or "no", mark uncertain criteria "unverifiable", and explain why in limitations_and_uncertainty.
 7. "overall_assessment":
    - "appears_satisfied" ONLY if ALL criteria are "satisfied" and views are comparable.
    - "concerns_identified" if ANY criterion is "unmet".
    - Otherwise "insufficient_evidence".
-8. Return ONLY valid JSON matching the exact schema.`;
+8. "recommended_next_steps": Give 1 concrete next step such as "Proceed to homeowner review", "Request a closer photograph", "Inspect visible concern", or "Request a correction".
+9. Return ONLY valid JSON matching the exact schema.`;
 
   const taskText = [
     `Repair Task: ${opts.task.title}`,
@@ -523,91 +647,31 @@ Tone & Evidence Rules:
     `Contractor Notes: ${opts.task.contractor_notes || "None"}`,
     `Acceptance Criteria:`,
     ...opts.task.acceptance_criteria.map((c, idx) => `${idx + 1}. ${c}`),
+    ...(opts.qualityWarnings.length
+      ? ["", `Pre-analysis Image Quality Warnings: ${opts.qualityWarnings.join(" ")}`]
+      : []),
     "",
     knowledgeText,
     "",
-    `Images supplied below in order: ${opts.beforeImages.length} BEFORE image(s), followed by ${opts.afterImages.length} AFTER image(s).`,
+    `Images supplied below in order: ${opts.beforeCount} BEFORE image(s), followed by ${opts.afterCount} AFTER image(s).`,
   ].join("\n");
 
-  let rawResponse: { text: string; model: string };
+  return { systemPrompt, taskText };
+}
 
-  if (cfg.provider === "ollama") {
-    const orderedImages = [
-      ...opts.beforeImages.map((img) => img.bytes),
-      ...opts.afterImages.map((img) => img.bytes),
-    ];
-    rawResponse = await callOllamaChatJSON({
-      baseUrl: cfg.baseUrl,
-      model: cfg.model,
-      system: systemPrompt,
-      userText: taskText,
-      images: orderedImages,
-      formatSchema: EVIDENCE_JSON_SCHEMA,
-      fetchImpl: opts.fetchImpl,
-    });
-  } else if (cfg.provider === "gemini") {
-    const parts: Array<
-      { text: string } | { inlineData: { mimeType: string; data: string } }
-    > = [{ text: taskText }];
-    opts.beforeImages.forEach((img, idx) => {
-      parts.push({ text: `BEFORE PHOTO #${idx + 1}:` });
-      parts.push({
-        inlineData: {
-          mimeType: img.record.mime_type,
-          data: img.bytes.toString("base64"),
-        },
-      });
-    });
-    opts.afterImages.forEach((img, idx) => {
-      parts.push({ text: `AFTER PHOTO #${idx + 1}:` });
-      parts.push({
-        inlineData: {
-          mimeType: img.record.mime_type,
-          data: img.bytes.toString("base64"),
-        },
-      });
-    });
-    rawResponse = await callGeminiJSON({
-      apiKey: cfg.apiKey,
-      model: cfg.model,
-      systemInstruction: systemPrompt,
-      parts,
-    });
-  } else {
-    const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: taskText }];
-    opts.beforeImages.forEach((img, idx) => {
-      content.push({ type: "text", text: `BEFORE PHOTO #${idx + 1}:` });
-      content.push({
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: img.record.mime_type as "image/jpeg" | "image/png" | "image/webp",
-          data: img.bytes.toString("base64"),
-        },
-      });
-    });
-    opts.afterImages.forEach((img, idx) => {
-      content.push({ type: "text", text: `AFTER PHOTO #${idx + 1}:` });
-      content.push({
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: img.record.mime_type as "image/jpeg" | "image/png" | "image/webp",
-          data: img.bytes.toString("base64"),
-        },
-      });
-    });
-    rawResponse = await callAnthropicJSON({
-      apiKey: cfg.apiKey,
-      model: cfg.model,
-      system: systemPrompt,
-      content,
-    });
+function normalizeValidatedFindings(
+  rawText: string,
+  meta: {
+    source: AIAnalysisSource;
+    qualityWarnings: string[];
+    evidenceIds: string[];
+    imageHashes: string[];
+    inputFingerprint: string;
   }
-
+): { findings: AIStructuredFindings; recommendation: AIReviewRecord["recommendation"] } {
   let jsonParsed: unknown;
   try {
-    jsonParsed = parseJsonFromModel(rawResponse.text);
+    jsonParsed = parseJsonFromModel(rawText);
   } catch {
     throw new HttpError(502, "AI inspection returned non-JSON output; please retry.");
   }
@@ -617,7 +681,6 @@ Tone & Evidence Rules:
   }
 
   const out = parsed.data;
-  // Server-side evidence consistency guard: never overstate support.
   let overall = out.overall_assessment;
   let suggested = out.suggested_outcome;
   const statuses = out.criteria_checks.map((c) => c.status);
@@ -645,14 +708,455 @@ Tone & Evidence Rules:
     criteria_unverifiable: out.criteria_checks
       .filter((c) => c.status === "unverifiable")
       .map((c) => c.criterion),
+    is_genuine_ai: true,
+    analysis_source: meta.source,
+    analyzed_evidence_ids: meta.evidenceIds,
+    image_hashes: meta.imageHashes,
+    input_fingerprint: meta.inputFingerprint,
+    quality_warnings: meta.qualityWarnings,
   };
 
+  return { findings, recommendation: suggested };
+}
+
+async function runSingleProviderInference(opts: {
+  cfg: ActiveAIProviderConfig;
+  task: TaskBundle;
+  beforeImages: Array<{ record: EvidenceRecord; bytes: Buffer }>;
+  afterImages: Array<{ record: EvidenceRecord; bytes: Buffer }>;
+  qualityWarnings: string[];
+  evidenceIds: string[];
+  imageHashes: string[];
+  inputFingerprint: string;
+  fetchImpl?: typeof fetch;
+  geminiFactory?: GeminiFactory;
+}): Promise<{
+  provider: AIProviderType;
+  model: string;
+  analysisSource: AIAnalysisSource;
+  findings: AIStructuredFindings;
+  recommendation: AIReviewRecord["recommendation"];
+}> {
+  const { systemPrompt, taskText } = buildInspectionPrompts({
+    task: opts.task,
+    beforeCount: opts.beforeImages.length,
+    afterCount: opts.afterImages.length,
+    qualityWarnings: opts.qualityWarnings,
+  });
+
+  const preppedBefore = await Promise.all(
+    opts.beforeImages.map(async (b) => ({
+      record: b.record,
+      prepped: await prepareImageForAI(b.bytes, b.record.mime_type),
+    }))
+  );
+  const preppedAfter = await Promise.all(
+    opts.afterImages.map(async (a) => ({
+      record: a.record,
+      prepped: await prepareImageForAI(a.bytes, a.record.mime_type),
+    }))
+  );
+
+  if (opts.cfg.provider === "ollama") {
+    const orderedImages = [
+      ...preppedBefore.map((img) => img.prepped.bytes),
+      ...preppedAfter.map((img) => img.prepped.bytes),
+    ];
+    const rawResponse = await callOllamaChatJSON({
+      baseUrl: opts.cfg.baseUrl,
+      model: opts.cfg.model,
+      system: systemPrompt,
+      userText: taskText,
+      images: orderedImages,
+      formatSchema: EVIDENCE_JSON_SCHEMA,
+      fetchImpl: opts.fetchImpl,
+    });
+    const norm = normalizeValidatedFindings(rawResponse.text, {
+      source: "ollama_local",
+      qualityWarnings: opts.qualityWarnings,
+      evidenceIds: opts.evidenceIds,
+      imageHashes: opts.imageHashes,
+      inputFingerprint: opts.inputFingerprint,
+    });
+    return {
+      provider: "ollama",
+      model: rawResponse.model,
+      analysisSource: "ollama_local",
+      ...norm,
+    };
+  }
+
+  if (opts.cfg.provider === "gemini") {
+    const parts: Array<
+      { text: string } | { inlineData: { mimeType: string; data: string } }
+    > = [{ text: taskText }];
+    preppedBefore.forEach((img, idx) => {
+      parts.push({ text: `BEFORE PHOTO #${idx + 1}:` });
+      parts.push({
+        inlineData: {
+          mimeType: img.prepped.mimeType,
+          data: img.prepped.bytes.toString("base64"),
+        },
+      });
+    });
+    preppedAfter.forEach((img, idx) => {
+      parts.push({ text: `AFTER PHOTO #${idx + 1}:` });
+      parts.push({
+        inlineData: {
+          mimeType: img.prepped.mimeType,
+          data: img.prepped.bytes.toString("base64"),
+        },
+      });
+    });
+
+    const rawResponse = await generateGeminiStructuredContent({
+      apiKey: opts.cfg.apiKey,
+      model: opts.cfg.model,
+      systemInstruction: systemPrompt,
+      parts,
+      responseSchema: GEMINI_EVIDENCE_RESPONSE_SCHEMA,
+      clientFactory: opts.geminiFactory,
+    });
+    const norm = normalizeValidatedFindings(rawResponse.text, {
+      source: "gemini_live",
+      qualityWarnings: opts.qualityWarnings,
+      evidenceIds: opts.evidenceIds,
+      imageHashes: opts.imageHashes,
+      inputFingerprint: opts.inputFingerprint,
+    });
+    return {
+      provider: "gemini",
+      model: rawResponse.model,
+      analysisSource: "gemini_live",
+      ...norm,
+    };
+  }
+
+  const content: Anthropic.ContentBlockParam[] = [{ type: "text", text: taskText }];
+  preppedBefore.forEach((img, idx) => {
+    content.push({ type: "text", text: `BEFORE PHOTO #${idx + 1}:` });
+    content.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: img.prepped.mimeType as "image/jpeg" | "image/png" | "image/webp",
+        data: img.prepped.bytes.toString("base64"),
+      },
+    });
+  });
+  preppedAfter.forEach((img, idx) => {
+    content.push({ type: "text", text: `AFTER PHOTO #${idx + 1}:` });
+    content.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: img.prepped.mimeType as "image/jpeg" | "image/png" | "image/webp",
+        data: img.prepped.bytes.toString("base64"),
+      },
+    });
+  });
+  const rawResponse = await callAnthropicJSON({
+    apiKey: opts.cfg.apiKey,
+    model: opts.cfg.model,
+    system: systemPrompt,
+    content,
+  });
+  const norm = normalizeValidatedFindings(rawResponse.text, {
+    source: "anthropic_live",
+    qualityWarnings: opts.qualityWarnings,
+    evidenceIds: opts.evidenceIds,
+    imageHashes: opts.imageHashes,
+    inputFingerprint: opts.inputFingerprint,
+  });
   return {
-    provider: cfg.provider,
+    provider: "anthropic",
     model: rawResponse.model,
-    findings,
-    recommendation: suggested,
+    analysisSource: "anthropic_live",
+    ...norm,
   };
+}
+
+/**
+ * Direct provider helper (preserved cleanly for explicit single-provider tests like ai-eval.test.ts).
+ */
+export async function inspectTaskEvidence(opts: {
+  task: TaskBundle;
+  beforeImages: Array<{ record: EvidenceRecord; bytes: Buffer }>;
+  afterImages: Array<{ record: EvidenceRecord; bytes: Buffer }>;
+  aiOverride?: ActiveAIProviderConfig;
+  fetchImpl?: typeof fetch;
+  geminiFactory?: GeminiFactory;
+}): Promise<{
+  provider: AIProviderType;
+  model: string;
+  analysisSource: AIAnalysisSource;
+  findings: AIStructuredFindings;
+  recommendation: AIReviewRecord["recommendation"];
+  evidenceIds: string[];
+  imageHashes: string[];
+  inputFingerprint: string;
+  qualityWarnings: string[];
+}> {
+  if (!opts.beforeImages.length || !opts.afterImages.length) {
+    throw new HttpError(
+      409,
+      "Both before and after photographs must be uploaded before running AI inspection."
+    );
+  }
+  const quality = await assessEvidenceQuality(opts.beforeImages, opts.afterImages);
+  const inputFingerprint = computeInspectionFingerprint({
+    task: opts.task,
+    beforeHashes: quality.beforeHashes,
+    afterHashes: quality.afterHashes,
+  });
+  const cfg = await resolveActiveAIProvider(opts.aiOverride);
+  const out = await runSingleProviderInference({
+    cfg,
+    task: opts.task,
+    beforeImages: opts.beforeImages,
+    afterImages: opts.afterImages,
+    qualityWarnings: quality.warnings,
+    evidenceIds: quality.evidenceIds,
+    imageHashes: quality.allHashes,
+    inputFingerprint,
+    fetchImpl: opts.fetchImpl,
+    geminiFactory: opts.geminiFactory,
+  });
+  return {
+    ...out,
+    evidenceIds: quality.evidenceIds,
+    imageHashes: quality.allHashes,
+    inputFingerprint,
+    qualityWarnings: quality.warnings,
+  };
+}
+
+export type OrchestratedInspectionOutcome =
+  | {
+      outcome: "cached";
+      cachedReview: AIReviewRecord;
+      qualityWarnings: string[];
+      notice: string;
+    }
+  | {
+      outcome: "ai_completed";
+      provider: AIProviderType;
+      model: string;
+      analysisSource: AIAnalysisSource;
+      findings: AIStructuredFindings;
+      recommendation: AIReviewRecord["recommendation"];
+      evidenceIds: string[];
+      imageHashes: string[];
+      inputFingerprint: string;
+      qualityWarnings: string[];
+      fallbackNotice?: string;
+    }
+  | {
+      outcome: "guided_fallback";
+      activeTier: "guided_checklist";
+      reasonCode: GeminiErrorCode | "not_configured";
+      message: string;
+      qualityWarnings: string[];
+      evidenceIds: string[];
+      imageHashes: string[];
+      inputFingerprint: string;
+      template: ReturnType<typeof getGuidedChecklistTemplate>;
+    };
+
+const inFlightInspections = new Map<string, Promise<OrchestratedInspectionOutcome>>();
+
+/**
+ * 3-Tier Orchestrator:
+ * Level 1: Gemini Live Vision -> Level 2: Local Ollama Vision -> Level 3: Guided Checklist Fallback.
+ * Conserves free-tier quota with fingerprint caching & in-flight deduplication.
+ */
+export async function inspectTaskEvidenceWithFallback(opts: {
+  task: TaskBundle;
+  beforeImages: Array<{ record: EvidenceRecord; bytes: Buffer }>;
+  afterImages: Array<{ record: EvidenceRecord; bytes: Buffer }>;
+  retryLiveAI?: boolean;
+  fetchImpl?: typeof fetch;
+  geminiFactory?: GeminiFactory;
+}): Promise<OrchestratedInspectionOutcome> {
+  if (!opts.beforeImages.length || !opts.afterImages.length) {
+    throw new HttpError(
+      409,
+      "Upload at least one BEFORE and one AFTER photograph before running AI inspection."
+    );
+  }
+
+  const quality = await assessEvidenceQuality(opts.beforeImages, opts.afterImages);
+  const inputFingerprint = computeInspectionFingerprint({
+    task: opts.task,
+    beforeHashes: quality.beforeHashes,
+    afterHashes: quality.afterHashes,
+  });
+
+  if (opts.retryLiveAI) {
+    clearGeminiCooldown();
+  }
+
+  // Free-tier conservation: reuse a verified genuine AI report when images, criteria, and notes are identical.
+  if (!opts.retryLiveAI) {
+    const cached = opts.task.reviews.find(
+      (r) => r.is_genuine_ai && r.input_fingerprint === inputFingerprint
+    );
+    if (cached) {
+      return {
+        outcome: "cached",
+        cachedReview: cached,
+        qualityWarnings: quality.warnings,
+        notice: `Reused verified ${cached.provider} inspection (${cached.model}) for unchanged photographs and criteria.`,
+      };
+    }
+  }
+
+  const dedupKey = `${opts.task.id}:${inputFingerprint}:${opts.retryLiveAI ? "retry" : "normal"}`;
+  const existingFlight = inFlightInspections.get(dedupKey);
+  if (existingFlight) {
+    return existingFlight;
+  }
+
+  const work = (async (): Promise<OrchestratedInspectionOutcome> => {
+    const geminiCred = await resolveGeminiCredential();
+    const cooldown = getGeminiCooldownState();
+    let fallbackReasonCode: GeminiErrorCode | "not_configured" = "not_configured";
+    let fallbackReasonMessage =
+      "Live AI inspection is temporarily unavailable. Guided review is available.";
+
+    // Level 1: Gemini Live Vision
+    if (geminiCred.configured && geminiCred.apiKey && !cooldown.active) {
+      try {
+        const res = await runSingleProviderInference({
+          cfg: { provider: "gemini", apiKey: geminiCred.apiKey, model: geminiCred.model },
+          task: opts.task,
+          beforeImages: opts.beforeImages,
+          afterImages: opts.afterImages,
+          qualityWarnings: quality.warnings,
+          evidenceIds: quality.evidenceIds,
+          imageHashes: quality.allHashes,
+          inputFingerprint,
+          geminiFactory: opts.geminiFactory,
+        });
+        return {
+          outcome: "ai_completed",
+          ...res,
+          evidenceIds: quality.evidenceIds,
+          imageHashes: quality.allHashes,
+          inputFingerprint,
+          qualityWarnings: quality.warnings,
+        };
+      } catch (err) {
+        if (err instanceof GeminiClassifiedError) {
+          // Malformed output or corrupt image MUST fail visibly rather than faking fallback success.
+          if (err.code === "malformed_response" || err.code === "invalid_image") {
+            throw err;
+          }
+          fallbackReasonCode = err.code;
+          fallbackReasonMessage = err.message;
+        } else if (err instanceof HttpError && err.status === 502) {
+          throw err;
+        } else {
+          fallbackReasonCode = "provider_unavailable";
+          fallbackReasonMessage =
+            err instanceof Error ? err.message : "Gemini inspection unavailable.";
+        }
+      }
+    } else if (cooldown.active) {
+      fallbackReasonCode = cooldown.code || "daily_quota_exhausted";
+      fallbackReasonMessage =
+        cooldown.reason || "Gemini quota cooldown active. Guided or local review is available.";
+    }
+
+    // Level 2: Local Ollama Multimodal Vision (only if running and model installed)
+    const ollamaHealth = await probeOllamaHealth(opts.fetchImpl);
+    if (ollamaHealth.reachable && ollamaHealth.modelAvailable) {
+      try {
+        const res = await runSingleProviderInference({
+          cfg: { provider: "ollama", baseUrl: ollamaHealth.baseUrl, model: ollamaHealth.model },
+          task: opts.task,
+          beforeImages: opts.beforeImages,
+          afterImages: opts.afterImages,
+          qualityWarnings: quality.warnings,
+          evidenceIds: quality.evidenceIds,
+          imageHashes: quality.allHashes,
+          inputFingerprint,
+          fetchImpl: opts.fetchImpl,
+        });
+        return {
+          outcome: "ai_completed",
+          ...res,
+          evidenceIds: quality.evidenceIds,
+          imageHashes: quality.allHashes,
+          inputFingerprint,
+          qualityWarnings: quality.warnings,
+          ...(geminiCred.configured
+            ? {
+                fallbackNotice: `Gemini unavailable (${fallbackReasonCode}); completed local vision inspection via Ollama (${ollamaHealth.model}).`,
+              }
+            : {}),
+        };
+      } catch (err) {
+        if (err instanceof HttpError && err.status === 502) throw err;
+        fallbackReasonMessage = `${fallbackReasonMessage} Local Ollama also failed (${
+          err instanceof Error ? err.message : "error"
+        }).`;
+      }
+    }
+
+    // Optional Anthropic backup if explicitly configured and Level 1 failed due to unavailability
+    if (process.env.ANTHROPIC_API_KEY?.trim()) {
+      try {
+        const res = await runSingleProviderInference({
+          cfg: {
+            provider: "anthropic",
+            apiKey: process.env.ANTHROPIC_API_KEY.trim(),
+            model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
+          },
+          task: opts.task,
+          beforeImages: opts.beforeImages,
+          afterImages: opts.afterImages,
+          qualityWarnings: quality.warnings,
+          evidenceIds: quality.evidenceIds,
+          imageHashes: quality.allHashes,
+          inputFingerprint,
+        });
+        return {
+          outcome: "ai_completed",
+          ...res,
+          evidenceIds: quality.evidenceIds,
+          imageHashes: quality.allHashes,
+          inputFingerprint,
+          qualityWarnings: quality.warnings,
+          ...(geminiCred.configured
+            ? { fallbackNotice: `Switched from Gemini (${fallbackReasonCode}) to Anthropic.` }
+            : {}),
+        };
+      } catch {
+        // Proceed to Level 3 Guided Fallback cleanly
+      }
+    }
+
+    // Level 3: Guided Inspection Fallback (never claims AI saw images)
+    return {
+      outcome: "guided_fallback",
+      activeTier: "guided_checklist",
+      reasonCode: fallbackReasonCode,
+      message: `${fallbackReasonMessage} Guided review is available.`,
+      qualityWarnings: quality.warnings,
+      evidenceIds: quality.evidenceIds,
+      imageHashes: quality.allHashes,
+      inputFingerprint,
+      template: getGuidedChecklistTemplate(opts.task),
+    };
+  })();
+
+  inFlightInspections.set(dedupKey, work);
+  try {
+    return await work;
+  } finally {
+    inFlightInspections.delete(dedupKey);
+  }
 }
 
 export async function answerInspectionQuestion(opts: {
@@ -661,6 +1165,7 @@ export async function answerInspectionQuestion(opts: {
   images?: Array<{ record: EvidenceRecord; bytes: Buffer }>;
   aiOverride?: ActiveAIProviderConfig;
   fetchImpl?: typeof fetch;
+  geminiFactory?: GeminiFactory;
 }): Promise<{
   answer: string;
   source: "deterministic_payment_rule" | "stored_inspection_record" | AIProviderType;
@@ -670,7 +1175,7 @@ export async function answerInspectionQuestion(opts: {
   if (!q) throw new HttpError(400, "Enter a question about this repair inspection.");
   const lower = q.toLowerCase();
 
-  // 1. Deterministic payment workflow answers directly from stored record (never let LLM invent tx rules/IDs)
+  // 1. Deterministic payment rules from live DB record (never let LLM guess payment IDs/statuses)
   if (
     /\b(reject|void|accept|capture|pay|payment|money|hold|paypal|simulat|status|how much|refund|authorized)\b/i.test(
       lower
@@ -718,6 +1223,14 @@ export async function answerInspectionQuestion(opts: {
       };
     }
 
+    if (lower.includes("correct")) {
+      return {
+        answer: `Requesting corrections updates work status to CORRECTIONS_REQUESTED and leaves authorization ${refId} (${amt}) open while the contractor uploads revised photos. ${modeNote}`,
+        source: "deterministic_payment_rule",
+        model: null,
+      };
+    }
+
     return {
       answer: `Payment state for "${opts.task.title}" (${amt}) is currently ${p.payment_status} (reference: ${refId}). ${modeNote}`,
       source: "deterministic_payment_rule",
@@ -725,26 +1238,32 @@ export async function answerInspectionQuestion(opts: {
     };
   }
 
-  // 2. Scope check: must relate to repair, photos, criteria, notes, inspection, defects, next steps
+  // 2. Contextual scope guard
   const inScope =
-    /\b(photo|image|before|after|issue|concern|defect|paint|tile|grout|patch|wall|floor|gap|align|criteri|unmet|satisfied|evidence|note|inspect|review|recommend|upload|uncertain|limit|notice|show|missing|next)\b/i.test(
+    /\b(photo|image|before|after|issue|concern|defect|paint|tile|grout|patch|wall|floor|gap|align|criteri|unmet|satisfied|evidence|note|inspect|review|recommend|upload|uncertain|limit|notice|show|missing|next|inconclusive)\b/i.test(
       lower
     );
   if (!inScope) {
     return {
       answer:
-        "I can only answer questions about this repair task's submitted photos, acceptance criteria, AI inspection findings, contractor notes, and PunchPay payment rules.",
+        "I can only answer questions about this repair task's submitted photos, acceptance criteria, inspection findings, contractor notes, and PunchPay payment rules.",
       source: "deterministic_payment_rule",
       model: null,
     };
   }
 
-  // 3. Try active AI model with task context + photos if configured
-  let cfg: ActiveAIProviderConfig | null;
-  try {
-    cfg = getActiveAIProvider(opts.aiOverride);
-  } catch {
-    cfg = null;
+  // 3. Try Level 1 (Gemini) or explicit override or Level 2 (Ollama) if reachable
+  let cfg: ActiveAIProviderConfig | null = opts.aiOverride ?? null;
+  if (!cfg) {
+    const gem = await resolveGeminiCredential();
+    if (gem.configured && gem.apiKey && !getGeminiCooldownState().active) {
+      cfg = { provider: "gemini", apiKey: gem.apiKey, model: gem.model };
+    } else {
+      const ol = await probeOllamaHealth(opts.fetchImpl);
+      if (ol.reachable && ol.modelAvailable) {
+        cfg = { provider: "ollama", baseUrl: ol.baseUrl, model: ol.model };
+      }
+    }
   }
 
   const f = opts.task.latest_review?.structured_findings;
@@ -757,17 +1276,23 @@ Ground every claim strictly in the provided task details, acceptance criteria, s
       `Contractor notes: ${opts.task.contractor_notes || "None"}`,
       `Work status: ${opts.task.work_status}`,
       f
-        ? `Latest AI assessment: ${f.overall_assessment} — ${f.summary} | Unmet: ${
-            f.criteria_unmet.join("; ") || "None"
-          } | Missing: ${f.missing_evidence.join("; ") || "None"} | Limits: ${
-            f.limitations_and_uncertainty.join("; ")
-          }`
-        : "No AI vision report has been generated yet.",
+        ? `Latest inspection (${opts.task.latest_review?.is_genuine_ai ? "AI" : "Guided checklist"}): ${
+            f.overall_assessment
+          } — ${f.summary} | Unmet: ${f.criteria_unmet.join("; ") || "None"} | Missing: ${
+            f.missing_evidence.join("; ") || "None"
+          } | Limits: ${f.limitations_and_uncertainty.join("; ")}`
+        : "No inspection report has been generated yet.",
       `Question: ${q}`,
       `Return ONLY valid JSON: {"answer": "2-3 sentence grounded reply"}`,
     ].join("\n");
 
     try {
+      const preppedImgs = await Promise.all(
+        (opts.images ?? []).map(async (img) => ({
+          record: img.record,
+          prepped: await prepareImageForAI(img.bytes, img.record.mime_type),
+        }))
+      );
       const raw =
         cfg.provider === "ollama"
           ? await callOllamaChatJSON({
@@ -775,20 +1300,24 @@ Ground every claim strictly in the provided task details, acceptance criteria, s
               model: cfg.model,
               system,
               userText: contextText,
-              images: (opts.images ?? []).map((i) => i.bytes),
+              images: preppedImgs.map((i) => i.prepped.bytes),
               fetchImpl: opts.fetchImpl,
             })
           : cfg.provider === "gemini"
-          ? await callGeminiJSON({
+          ? await generateGeminiStructuredContent({
               apiKey: cfg.apiKey,
               model: cfg.model,
               systemInstruction: system,
               parts: [
                 { text: contextText },
-                ...(opts.images ?? []).map((img) => ({
-                  inlineData: { mimeType: img.record.mime_type, data: img.bytes.toString("base64") },
+                ...preppedImgs.map((img) => ({
+                  inlineData: {
+                    mimeType: img.prepped.mimeType,
+                    data: img.prepped.bytes.toString("base64"),
+                  },
                 })),
               ],
+              clientFactory: opts.geminiFactory,
             })
           : await callAnthropicJSON({
               apiKey: cfg.apiKey,
@@ -796,12 +1325,12 @@ Ground every claim strictly in the provided task details, acceptance criteria, s
               system,
               content: [
                 { type: "text", text: contextText },
-                ...(opts.images ?? []).map((img) => ({
+                ...preppedImgs.map((img) => ({
                   type: "image" as const,
                   source: {
                     type: "base64" as const,
-                    media_type: img.record.mime_type as "image/jpeg" | "image/png" | "image/webp",
-                    data: img.bytes.toString("base64"),
+                    media_type: img.prepped.mimeType as "image/jpeg" | "image/png" | "image/webp",
+                    data: img.prepped.bytes.toString("base64"),
                   },
                 })),
               ],
@@ -817,18 +1346,27 @@ Ground every claim strictly in the provided task details, acceptance criteria, s
         };
       }
     } catch {
-      // Fall through cleanly to stored inspection record summary if model unreachable
+      // Fall through cleanly to deterministic stored/guided reply
     }
   }
 
-  // 4. Honest fallback strictly from stored task & AI record (never inventing visual claims)
+  // 4. Deterministic reply grounded strictly in stored inspection or repair knowledge template
   if (f) {
+    if (lower.includes("inconclusive") || lower.includes("uncertain") || lower.includes("why")) {
+      return {
+        answer: `Current inspection is marked "${f.overall_assessment.replaceAll("_", " ")}". ${
+          f.limitations_and_uncertainty[0] || f.summary
+        } ${f.missing_evidence[0] || ""}`.trim(),
+        source: "stored_inspection_record",
+        model: opts.task.latest_review?.model || null,
+      };
+    }
     if (lower.includes("unmet") || lower.includes("issue") || lower.includes("concern") || lower.includes("notice")) {
       const unmet = f.criteria_unmet.length
         ? f.criteria_unmet.join("; ")
         : "No criteria were marked unmet.";
       return {
-        answer: `From the stored inspection (${f.overall_assessment.replaceAll("_", " ")}): ${f.summary} Unmet criteria: ${unmet}`,
+        answer: `From stored inspection (${f.overall_assessment.replaceAll("_", " ")}): ${f.summary} Unmet criteria: ${unmet}`,
         source: "stored_inspection_record",
         model: opts.task.latest_review?.model || null,
       };
@@ -836,21 +1374,34 @@ Ground every claim strictly in the provided task details, acceptance criteria, s
     if (lower.includes("next") || lower.includes("more evidence") || lower.includes("photograph")) {
       const next = [...f.missing_evidence, ...f.recommended_next_steps].slice(0, 2).join(" ");
       return {
-        answer: `Stored inspection recommends: ${next || "Verify surfaces directly in person before releasing funds."} Limitation: ${f.limitations_and_uncertainty[0] || "Photos show visible surfaces only."}`,
+        answer: `Recommended next action: ${next || "Capture a clearer close-up photograph."} Limitation: ${
+          f.limitations_and_uncertainty[0] || "Photographs show visible surfaces only."
+        }`,
         source: "stored_inspection_record",
         model: opts.task.latest_review?.model || null,
       };
     }
     return {
-      answer: `${f.summary} Satisfied criteria: ${f.criteria_satisfied.length}; unmet: ${f.criteria_unmet.length}; unverifiable: ${f.criteria_unverifiable.length}.`,
+      answer: `${f.summary} Satisfied: ${f.criteria_satisfied.length}; unmet: ${f.criteria_unmet.length}; unverifiable: ${f.criteria_unverifiable.length}.`,
       source: "stored_inspection_record",
       model: opts.task.latest_review?.model || null,
     };
   }
 
+  const template = getGuidedChecklistTemplate(opts.task);
+  if (lower.includes("next") || lower.includes("photograph")) {
+    return {
+      answer: `Recommended framing for ${opts.task.title}: ${template.recommendedPhotos.join(" ")}`,
+      source: "stored_inspection_record",
+      model: null,
+    };
+  }
+
   return {
-    answer: `No live AI inspection report is stored yet for "${opts.task.title}" (${opts.task.evidence.length} uploaded photo(s)). Criteria to verify manually: ${opts.task.acceptance_criteria.join("; ")}.`,
+    answer: `No inspection report is saved yet for "${opts.task.title}" (${opts.task.evidence.length} uploaded photo(s)). Check against agreed criteria: ${opts.task.acceptance_criteria.join("; ")}.`,
     source: "stored_inspection_record",
     model: null,
   };
 }
+
+export { setGeminiCooldown, clearGeminiCooldown, getGeminiCooldownState };

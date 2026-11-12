@@ -136,8 +136,12 @@ export default function ContractorWorkspacePage() {
         }
       })();
       if (xhr.status >= 200 && xhr.status < 300) {
+        const warnNote =
+          Array.isArray(data.qualityWarnings) && data.qualityWarnings.length
+            ? ` Warning: ${data.qualityWarnings[0]}`
+            : "";
         setBanner({
-          text: `${stage.toUpperCase()} photo uploaded & sanitized (${data.evidence?.width}×${data.evidence?.height}).`,
+          text: `${stage.toUpperCase()} photo uploaded & sanitized (${data.evidence?.width}×${data.evidence?.height}).${warnNote}`,
           ok: true,
         });
         await load();
@@ -178,13 +182,44 @@ export default function ContractorWorkspacePage() {
 
   async function runAIInspection(taskId: string) {
     setBusyAction("ai");
-    setBanner(null);
+    setBanner({
+      text: "Reviewing submitted photographs against the repair criteria.",
+      ok: true,
+    });
     try {
-      const res = await fetch(`/api/tasks/${taskId}/review`, { method: "POST" });
+      const res = await fetch(`/api/tasks/${taskId}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "AI inspection failed");
+      if (json.status === "guided_fallback") {
+        setBanner({
+          text:
+            json.message ||
+            "Live AI inspection is temporarily unavailable. Open Full Inspection View for Guided Review.",
+          ok: true,
+        });
+        await load();
+        return;
+      }
+      if (json.status === "cached") {
+        setBanner({
+          text: json.notice || "Reused verified AI inspection for unchanged photographs.",
+          ok: true,
+        });
+        await load();
+        return;
+      }
+      const modeLabel =
+        json.review?.provider === "gemini"
+          ? "Gemini AI · Live inspection"
+          : json.review?.provider === "ollama"
+          ? "Local AI · Image inspection"
+          : json.review?.provider;
       setBanner({
-        text: `AI inspection v${json.review.review_version} recorded (${json.review.structured_findings.overall_assessment.replaceAll("_", " ")}).`,
+        text: `${modeLabel} v${json.review.review_version} recorded (${json.review.structured_findings.overall_assessment.replaceAll("_", " ")}).`,
         ok: true,
       });
       await load();
@@ -536,13 +571,7 @@ export default function ContractorWorkspacePage() {
                         <Button
                           size="sm"
                           variant="primary"
-                          title={
-                            !config.ai.configured
-                              ? "Configure local Ollama or Gemini/Claude key to enable AI inspection"
-                              : undefined
-                          }
                           disabled={
-                            !config.ai.configured ||
                             busyAction === "ai" ||
                             !activeEntry.task.evidence.some(
                               (e) => e.evidence_type === "before"
@@ -555,12 +584,10 @@ export default function ContractorWorkspacePage() {
                         >
                           <Sparkles className="h-3.5 w-3.5" />
                           {busyAction === "ai"
-                            ? `Reviewing ${activeEntry.task.acceptance_criteria.length} criteria…`
+                            ? "Reviewing submitted photographs..."
                             : activeEntry.task.latest_review
                             ? "Re-run AI Inspection"
-                            : config.ai.configured
-                            ? "Run AI Inspection"
-                            : "AI Offline (Manual Checklist)"}
+                            : "Run AI Inspection"}
                         </Button>
                         <Link href={`/tasks/${activeEntry.task.id}`}>
                           <Button size="sm" variant="outline">
@@ -574,10 +601,15 @@ export default function ContractorWorkspacePage() {
 
                   {activeEntry.task.latest_review && (
                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs space-y-1.5">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <span className="inline-flex items-center gap-1.5 font-semibold text-slate-900">
                           <CheckCircle2 className="h-4 w-4 text-blue-600" />
-                          Latest AI Report (v{activeEntry.task.latest_review.review_version})
+                          {activeEntry.task.latest_review.provider === "gemini"
+                            ? "Gemini AI · Live inspection"
+                            : activeEntry.task.latest_review.provider === "ollama"
+                            ? "Local AI · Image inspection"
+                            : "Guided Review · AI analysis unavailable"}{" "}
+                          (v{activeEntry.task.latest_review.review_version})
                         </span>
                         <span className="font-mono-code text-slate-500">
                           {activeEntry.task.latest_review.model}

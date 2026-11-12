@@ -59,6 +59,24 @@ export default function TaskInspectionPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [banner, setBanner] = useState<{ text: string; ok: boolean } | null>(null);
+  const [notesDraft, setNotesDraft] = useState("");
+  const [qualityWarnings, setQualityWarnings] = useState<string[]>([]);
+  const [cachedNotice, setCachedNotice] = useState<string | null>(null);
+  const [fallbackState, setFallbackState] = useState<{
+    message: string;
+    template: {
+      categoryLabel: string;
+      recommendedPhotos: string[];
+      questions: Array<{ id: string; question: string }>;
+      limitations: string[];
+      suggestedNextActions: string[];
+    };
+  } | null>(null);
+  const [guidedStatuses, setGuidedStatuses] = useState<
+    Record<string, "satisfied" | "unmet" | "unverifiable">
+  >({});
+  const [guidedNeedsCloser, setGuidedNeedsCloser] = useState(false);
+  const [guidedNotes, setGuidedNotes] = useState("");
 
   // Confirmation modal for homeowner decisions
   const [confirmDecision, setConfirmDecision] = useState<DecisionAction | null>(null);
@@ -90,6 +108,7 @@ export default function TaskInspectionPage() {
       setConfig(meJson.config);
       setTask(taskJson.task);
       setProject(taskJson.project);
+      setNotesDraft(taskJson.task?.contractor_notes || "");
     } catch (err) {
       setBanner({
         text: err instanceof Error ? err.message : "Failed to load task",
@@ -109,6 +128,8 @@ export default function TaskInspectionPage() {
     setBusy(`upload-${stage}`);
     setUploadPct(5);
     setBanner(null);
+    setFallbackState(null);
+    setCachedNotice(null);
     const form = new FormData();
     form.append("stage", stage);
     form.append("file", file);
@@ -128,6 +149,9 @@ export default function TaskInspectionPage() {
         }
       })();
       if (xhr.status >= 200 && xhr.status < 300) {
+        if (Array.isArray(data.qualityWarnings)) {
+          setQualityWarnings(data.qualityWarnings);
+        }
         setBanner({ text: `${stage.toUpperCase()} photograph uploaded.`, ok: true });
         await load();
       } else {
@@ -142,22 +166,145 @@ export default function TaskInspectionPage() {
     xhr.send(form);
   }
 
-  async function runAIReview() {
+  async function deleteEvidence(evidenceId: string) {
+    setBusy(`delete-${evidenceId}`);
+    setBanner(null);
+    try {
+      const res = await fetch(`/api/evidence/${evidenceId}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not remove photo");
+      setCachedNotice(null);
+      setBanner({ text: "Photograph removed cleanly.", ok: true });
+      await load();
+    } catch (err) {
+      setBanner({ text: err instanceof Error ? err.message : "Delete failed", ok: false });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveContractorNotes() {
+    if (!task) return;
+    setBusy("notes");
+    setBanner(null);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contractor_notes: notesDraft }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not save contractor notes");
+      setBanner({ text: "Work explanation saved.", ok: true });
+      await load();
+    } catch (err) {
+      setBanner({ text: err instanceof Error ? err.message : "Failed to save notes", ok: false });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runAIReview(retryLiveAI = false) {
     if (!task) return;
     setBusy("ai");
     setBanner(null);
+    setCachedNotice(null);
+    setFallbackState(null);
     try {
-      const res = await fetch(`/api/tasks/${task.id}/review`, { method: "POST" });
+      const res = await fetch(`/api/tasks/${task.id}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ retryLiveAI }),
+      });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "AI inspection failed");
+      if (Array.isArray(json.qualityWarnings)) {
+        setQualityWarnings(json.qualityWarnings);
+      }
+      if (json.status === "guided_fallback") {
+        setFallbackState({
+          message:
+            json.message || "Live AI inspection is temporarily unavailable. Guided review is available.",
+          template: json.template,
+        });
+        const initial: Record<string, "satisfied" | "unmet" | "unverifiable"> = {};
+        task.acceptance_criteria.forEach((c) => {
+          initial[c] = "unverifiable";
+        });
+        setGuidedStatuses(initial);
+        await load();
+        return;
+      }
+      if (json.status === "cached" && json.review) {
+        setSelectedReviewVersion(json.review.review_version);
+        setCachedNotice(json.notice || "Reused verified AI report for unchanged photographs.");
+        setBanner({ text: json.notice || "Displayed verified cached AI report.", ok: true });
+        return;
+      }
+      setSelectedReviewVersion(json.review.review_version);
+      const srcLabel =
+        json.review.provider === "gemini"
+          ? "Gemini AI · Live inspection"
+          : json.review.provider === "ollama"
+          ? "Local AI · Image inspection"
+          : `${json.review.provider}`;
       setBanner({
-        text: `AI Inspection v${json.review.review_version} completed via ${json.review.provider} (${json.review.model}).`,
+        text: `${srcLabel} v${json.review.review_version} completed (${json.review.model}).`,
+        ok: true,
+      });
+      if (json.fallbackNotice) {
+        setFallbackState({
+          message: json.fallbackNotice,
+          template: fallbackState?.template ?? {
+            categoryLabel: "Repair Inspection",
+            recommendedPhotos: [],
+            questions: [],
+            limitations: [],
+            suggestedNextActions: [],
+          },
+        });
+      }
+      await load();
+    } catch (err) {
+      setBanner({
+        text: err instanceof Error ? err.message : "AI inspection failed",
+        ok: false,
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function submitGuidedReview() {
+    if (!task) return;
+    setBusy("guided");
+    setBanner(null);
+    try {
+      const criteriaResponses = task.acceptance_criteria.map((c) => ({
+        criterion: c,
+        status: guidedStatuses[c] ?? "unverifiable",
+      }));
+      const res = await fetch(`/api/tasks/${task.id}/guided-review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          criteriaResponses,
+          needsCloserPhoto: guidedNeedsCloser,
+          reviewerNotes: guidedNotes,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not save guided review");
+      setFallbackState(null);
+      setSelectedReviewVersion(json.review.review_version);
+      setBanner({
+        text: `Guided Review v${json.review.review_version} recorded (user-reported, AI unavailable).`,
         ok: true,
       });
       await load();
     } catch (err) {
       setBanner({
-        text: err instanceof Error ? err.message : "AI inspection failed",
+        text: err instanceof Error ? err.message : "Failed to save guided review",
         ok: false,
       });
     } finally {
@@ -484,32 +631,62 @@ export default function TaskInspectionPage() {
                 annotations={task.annotations}
                 currentUserId={user.id}
                 canAnnotate={!isSettled}
+                canDelete={user.role === "contractor" && !isSettled}
+                onDelete={deleteEvidence}
                 onAnnotationChange={load}
               />
 
               {user.role === "contractor" && !isSettled && (
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                  {(["before", "after"] as const).map((stage) => (
+                <div className="space-y-3 pt-2">
+                  <div className="grid grid-cols-2 gap-3">
+                    {(["before", "after"] as const).map((stage) => (
+                      <label
+                        key={stage}
+                        className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-[#F7F8FA] p-3 text-center hover:border-[#2563EB] cursor-pointer"
+                      >
+                        <UploadCloud className="h-4 w-4 text-[#2563EB]" />
+                        <span className="mt-1 text-xs font-medium capitalize text-slate-800">
+                          {((stage === "before" && before) || (stage === "after" && after))
+                            ? `Replace ${stage}`
+                            : `Upload ${stage}`}
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleUpload(stage, f);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="space-y-1.5">
                     <label
-                      key={stage}
-                      className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-[#F7F8FA] p-3 text-center hover:border-[#2563EB] cursor-pointer"
+                      htmlFor="task-contractor-notes"
+                      className="block text-xs font-semibold text-slate-700"
                     >
-                      <UploadCloud className="h-4 w-4 text-[#2563EB]" />
-                      <span className="mt-1 text-xs font-medium capitalize text-slate-800">
-                        Upload {stage}
-                      </span>
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) handleUpload(stage, f);
-                          e.target.value = "";
-                        }}
-                      />
+                      Explanation of work completed
                     </label>
-                  ))}
+                    <Textarea
+                      id="task-contractor-notes"
+                      rows={2}
+                      value={notesDraft}
+                      onChange={(e) => setNotesDraft(e.target.value)}
+                      placeholder="Describe repair steps, materials, or camera angles..."
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy === "notes"}
+                      onClick={saveContractorNotes}
+                    >
+                      {busy === "notes" ? "Saving..." : "Save Work Explanation"}
+                    </Button>
+                  </div>
                 </div>
               )}
 
@@ -522,7 +699,21 @@ export default function TaskInspectionPage() {
                 </div>
               )}
 
-              {task.contractor_notes && (
+              {qualityWarnings.length > 0 && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-950 space-y-1">
+                  <p className="font-semibold flex items-center gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-700" />
+                    Evidence Quality Check
+                  </p>
+                  <ul className="list-disc pl-4 space-y-0.5">
+                    {qualityWarnings.map((w, idx) => (
+                      <li key={idx}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {user.role !== "contractor" && task.contractor_notes && (
                 <div className="rounded-xl border border-slate-200 bg-[#F7F8FA] p-3 text-xs text-slate-700">
                   <strong>Contractor Notes:</strong> {task.contractor_notes}
                 </div>
@@ -541,32 +732,131 @@ export default function TaskInspectionPage() {
             </Card>
           </div>
 
-          {/* Right: Structured Inspection, Ask Assistant & Homeowner Decision */}
+          {/* Right: Work Evidence & AI Inspection, Ask Assistant & Homeowner Decision */}
           <div className="lg:col-span-6 space-y-5">
             <Card className="p-5 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h2 className="text-base font-semibold text-[#17243A]">
-                    Evidence Inspection
+                    Work Evidence &amp; AI Inspection
                   </h2>
                   <p className="text-xs text-slate-500">
-                    AI assists review — homeowner holds final payment authority.
+                    {config.ai.activeTier === "gemini_live"
+                      ? `Gemini AI · Live inspection (${config.ai.model})`
+                      : config.ai.activeTier === "ollama_local"
+                      ? `Local AI · Image inspection (${config.ai.model})`
+                      : "Guided Review · AI analysis unavailable"}
                   </p>
                 </div>
                 <Button
                   size="sm"
-                  variant="outline"
-                  disabled={busy === "ai" || !before || !after || !config.ai.configured}
-                  onClick={runAIReview}
+                  variant="primary"
+                  disabled={busy === "ai" || !before || !after}
+                  onClick={() => runAIReview(false)}
                 >
-                  <Sparkles className="h-3.5 w-3.5 text-[#2563EB]" />
+                  <Sparkles className="h-3.5 w-3.5" />
                   {busy === "ai"
-                    ? `Reviewing ${task.acceptance_criteria.length} criteria…`
+                    ? "Running Inspection..."
                     : findings
                     ? "Re-run AI Inspection"
                     : "Run AI Inspection"}
                 </Button>
               </div>
+
+              {busy === "ai" && (
+                <div
+                  role="status"
+                  className="rounded-xl border border-blue-200 bg-blue-50/70 p-3.5 text-xs font-medium text-blue-950 flex items-center gap-2.5"
+                >
+                  <RefreshCw className="h-4 w-4 text-[#2563EB] animate-spin shrink-0" />
+                  <span>Reviewing submitted photographs against the repair criteria.</span>
+                </div>
+              )}
+
+              {cachedNotice && (
+                <div className="rounded-xl border border-slate-200 bg-[#F7F8FA] px-3.5 py-2.5 text-xs text-slate-700">
+                  {cachedNotice}
+                </div>
+              )}
+
+              {fallbackState && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 space-y-3 text-xs">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="font-semibold text-amber-950">
+                        Guided Review · AI analysis unavailable
+                      </p>
+                      <p className="mt-0.5 text-amber-900">{fallbackState.message}</p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy === "ai"}
+                      onClick={() => runAIReview(true)}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Retry Live AI
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2 border-t border-amber-200/80 pt-3">
+                    <p className="font-semibold text-[#17243A]">
+                      {fallbackState.template.categoryLabel} Checklist (User-Reported)
+                    </p>
+                    {task.acceptance_criteria.map((crit) => (
+                      <div
+                        key={crit}
+                        className="rounded-lg border border-amber-200 bg-white p-2.5 space-y-1.5"
+                      >
+                        <p className="font-medium text-[#17243A]">{crit}</p>
+                        <div className="flex flex-wrap gap-2">
+                          {(
+                            [
+                              ["satisfied", "Appears satisfied"],
+                              ["unmet", "Visible concern"],
+                              ["unverifiable", "Cannot determine"],
+                            ] as const
+                          ).map(([val, lbl]) => (
+                            <label key={val} className="inline-flex items-center gap-1 cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`guided-${crit}`}
+                                checked={(guidedStatuses[crit] ?? "unverifiable") === val}
+                                onChange={() =>
+                                  setGuidedStatuses((prev) => ({ ...prev, [crit]: val }))
+                                }
+                              />
+                              <span>{lbl}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <label className="flex items-center gap-2 text-slate-800 cursor-pointer pt-1">
+                      <input
+                        type="checkbox"
+                        checked={guidedNeedsCloser}
+                        onChange={(e) => setGuidedNeedsCloser(e.target.checked)}
+                      />
+                      <span>Is a closer photograph needed before deciding?</span>
+                    </label>
+                    <Textarea
+                      rows={2}
+                      value={guidedNotes}
+                      onChange={(e) => setGuidedNotes(e.target.value)}
+                      placeholder="Optional user-reported observation from inspecting the photos..."
+                    />
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={busy === "guided"}
+                      onClick={submitGuidedReview}
+                    >
+                      {busy === "guided" ? "Saving Guided Review..." : "Save Guided Review"}
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               {task.reviews.length > 1 && (
                 <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -584,31 +874,55 @@ export default function TaskInspectionPage() {
                             : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                         }`}
                       >
-                        v{rev.review_version}
+                        v{rev.review_version} ({rev.provider})
                       </button>
                     );
                   })}
                 </div>
               )}
 
-              {!config.ai.configured && (
+              {!config.ai.configured && !fallbackState && !findings && (
                 <div className="rounded-xl border border-slate-300 bg-[#F7F8FA] p-3 text-xs text-slate-700 space-y-1">
                   <p className="font-semibold text-[#17243A]">
-                    Manual Checklist Inspection Mode (No AI Model Active)
+                    Guided Review Available (No AI Model Active)
                   </p>
                   <p>
                     {config.ai.ollama?.error
                       ? `${config.ai.ollama.error} — `
-                      : "No local Ollama model or Gemini/Claude key connected — "}
-                    inspect the Before and After photographs manually against each criterion below.
-                    PunchPay never presents manual evaluation or canned text as AI inference.
+                      : "No Gemini API key or local Ollama vision model connected — "}
+                    click <strong>Run AI Inspection</strong> after uploading photos to open the
+                    interactive guided checklist, or ask an administrator to configure Gemini in
+                    Settings.
                   </p>
                 </div>
               )}
 
               {findings ? (
                 <div className="space-y-4 text-xs">
-                  {/* Section 6: Assessment */}
+                  {/* Provenance Banner */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-[#F7F8FA] px-3 py-2">
+                    <span
+                      className={`font-semibold ${
+                        activeReview?.provider === "gemini"
+                          ? "text-emerald-800"
+                          : activeReview?.provider === "ollama"
+                          ? "text-blue-800"
+                          : "text-amber-900"
+                      }`}
+                    >
+                      {activeReview?.provider === "gemini"
+                        ? "Gemini AI · Live inspection"
+                        : activeReview?.provider === "ollama"
+                        ? "Local AI · Image inspection"
+                        : "Guided Review · AI analysis unavailable"}
+                    </span>
+                    <span className="font-mono-code text-[11px] text-slate-500">
+                      {activeReview?.model} · v{activeReview?.review_version} ·{" "}
+                      {activeReview ? formatDateTime(activeReview.created_at) : ""}
+                    </span>
+                  </div>
+
+                  {/* A. Assessment */}
                   <div
                     className={`rounded-xl border p-4 space-y-1.5 ${
                       findings.overall_assessment === "appears_satisfied"
@@ -629,13 +943,10 @@ export default function TaskInspectionPage() {
                         )}
                         Assessment:{" "}
                         {findings.overall_assessment === "appears_satisfied"
-                          ? "Appears satisfied"
+                          ? "Appears satisfactory from visible evidence"
                           : findings.overall_assessment === "concerns_identified"
-                          ? "Visible concerns remain"
-                          : "Insufficient evidence"}
-                      </span>
-                      <span className="font-mono-code text-[11px] opacity-80">
-                        {activeReview?.provider} · {activeReview?.model} · v{activeReview?.review_version}
+                          ? "Visible concerns identified"
+                          : "Insufficient evidence to determine"}
                       </span>
                     </div>
                     <p className="leading-relaxed">{findings.summary}</p>
@@ -644,10 +955,10 @@ export default function TaskInspectionPage() {
                     </p>
                   </div>
 
-                  {/* What the photos show */}
+                  {/* B. Visual observations */}
                   <div className="rounded-lg border border-slate-200 bg-white p-3.5">
                     <h3 className="font-semibold text-[#17243A] mb-1.5">
-                      What the photos show
+                      Visual observations
                     </h3>
                     <ul className="list-disc pl-4 space-y-1 text-slate-600">
                       {findings.visible_observations.map((o, i) => (
@@ -656,7 +967,7 @@ export default function TaskInspectionPage() {
                     </ul>
                   </div>
 
-                  {/* Acceptance criteria */}
+                  {/* C. Acceptance criteria */}
                   <div>
                     <h3 className="font-semibold text-[#17243A] mb-2">
                       Acceptance criteria
@@ -692,7 +1003,7 @@ export default function TaskInspectionPage() {
                     </ul>
                   </div>
 
-                  {/* Limitations & Missing Evidence */}
+                  {/* D. Limitations */}
                   <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3.5 space-y-1.5">
                     <h3 className="font-semibold text-amber-950">Limitations</h3>
                     <ul className="list-disc pl-4 space-y-0.5 text-amber-900">
@@ -705,10 +1016,10 @@ export default function TaskInspectionPage() {
                     </ul>
                   </div>
 
-                  {/* Suggested next step */}
+                  {/* E. Recommended next step */}
                   <div className="rounded-lg border border-slate-200 bg-[#F7F8FA] p-3.5">
                     <h3 className="font-semibold text-[#17243A] mb-1">
-                      Suggested next step
+                      Recommended next step
                     </h3>
                     <ul className="list-disc pl-4 text-slate-700 space-y-0.5">
                       {findings.recommended_next_steps.map((s, i) => (

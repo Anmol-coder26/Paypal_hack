@@ -1,4 +1,5 @@
 import type {
+  AIAnalysisSource,
   AIProviderType,
   AIReviewRecord,
   AIStructuredFindings,
@@ -15,6 +16,7 @@ import type {
   Project,
   ProjectBundle,
   RepairTask,
+  ServerCredentialRecord,
   TaskBundle,
   UserRole,
   WorkStatus,
@@ -143,9 +145,24 @@ export interface PunchPayRepository {
     task_id: string;
     model: string;
     provider: AIProviderType;
+    analysis_source: AIAnalysisSource;
+    is_genuine_ai: boolean;
+    analyzed_evidence_ids: string[];
+    image_hashes: string[];
+    input_fingerprint: string | null;
     structured_findings: AIStructuredFindings;
     recommendation: AIRecommendation;
   }): Promise<AIReviewRecord>;
+
+  // Encrypted Server Credentials (Admin-managed, never plaintext)
+  getServerCredential(provider: "gemini"): Promise<ServerCredentialRecord | null>;
+  saveServerCredential(input: {
+    provider: "gemini";
+    encrypted_payload: string;
+    model: string | null;
+    updated_by: string;
+  }): Promise<ServerCredentialRecord>;
+  deleteServerCredential(provider: "gemini"): Promise<void>;
 
   // Payments, Decisions, Events & Idempotency
   claimPaymentState(

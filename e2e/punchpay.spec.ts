@@ -159,9 +159,17 @@ test("full PunchPay 2.1 end-to-end workflow across simulation settlement, eviden
   await page.waitForURL("**/dashboard");
 
   await page.goto(demoProjectUrl);
-  // Settle Painting ($30 -> Accept & Capture)
+  // Settle Painting ($30 -> Guided Review Fallback -> Reload Persistence -> Accept & Capture)
   await page.locator("a", { hasText: /Inspect & Decide/i }).first().click();
   await page.waitForURL(/\/tasks\//);
+  await expect(page.getByText(/Work Evidence & AI Inspection/i)).toBeVisible();
+  await page.getByRole("button", { name: /Run AI Inspection/i }).click();
+  await expect(page.getByText(/Guided Review · AI analysis unavailable/i)).toBeVisible();
+  await page.getByRole("button", { name: /Save Guided Review/i }).click();
+  await expect(page.getByText(/Guided Review · AI analysis unavailable/i).first()).toBeVisible();
+  await page.reload();
+  await expect(page.getByText(/Guided Review · AI analysis unavailable/i).first()).toBeVisible();
+
   await expect(page.getByText("Ask about this inspection")).toBeVisible();
   await page.getByRole("button", { name: "What happens if I reject this repair?" }).click();
   await expect(page.getByText(/Simulation mode/i).first()).toBeVisible();
@@ -214,6 +222,10 @@ test("full PunchPay 2.1 end-to-end workflow across simulation settlement, eviden
   await expect(
     page.getByRole("heading", { name: /Settings & Environment Diagnostics/i })
   ).toBeVisible();
+  await expect(
+    page.getByText(/Administrator access required to manage AI credentials/i)
+  ).toBeVisible();
+  await expect(page.locator("#gemini-api-key")).toHaveCount(0);
 
   // 8. Interactive PayPal Fault-Injection Lab (/playground)
   await page.goto("/playground");
@@ -237,4 +249,69 @@ test("full PunchPay 2.1 end-to-end workflow across simulation settlement, eviden
   }
 
   expect(consoleErrors).toEqual([]);
+});
+
+test("Admin AI configuration UI encrypts, isolates, tests, replaces, and removes Gemini API key", async ({
+  page,
+}, testInfo) => {
+  // 1. Verify homeowner cannot call admin AI credential APIs (403)
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Demo Homeowner/i }).click();
+  await page.waitForURL("**/dashboard");
+
+  const putForbidden = await page.evaluate(async () => {
+    const res = await fetch("/api/settings/ai", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey: "AIzaHomeownerBlockedKey123", model: "gemini-2.5-flash" }),
+    });
+    return res.status;
+  });
+  expect(putForbidden).toBe(403);
+
+  // 2. Sign in as Demo Administrator -> /settings
+  await page.goto("/login");
+  await page.getByRole("button", { name: /System Administrator/i }).click();
+  await page.waitForURL("**/settings");
+
+  const keyInput = page.getByLabel("Gemini API Key");
+  await expect(keyInput).toHaveAttribute("type", "password");
+  const testSecret = "AIzaSyBrowserE2ETestKey987654";
+  await keyInput.fill(testSecret);
+
+  // Show/Hide toggle works cleanly
+  await page.getByRole("button", { name: /Show API key/i }).click();
+  await expect(keyInput).toHaveAttribute("type", "text");
+  await page.getByRole("button", { name: /Hide API key/i }).click();
+  await expect(keyInput).toHaveAttribute("type", "password");
+
+  // Save API Key -> encrypted on server, input cleared, health/status never return secret
+  await page.getByRole("button", { name: "Save API Key" }).click();
+  await expect(page.getByText(/Gemini Configured \(Encrypted Vault\)/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Replace Key" })).toBeVisible();
+
+  const healthText = await page.evaluate(async () => {
+    const r = await fetch("/api/health");
+    return r.text();
+  });
+  expect(healthText).not.toContain(testSecret);
+  expect(JSON.parse(healthText).config.ai.gemini.configured).toBe(true);
+
+  if (testInfo.project.name === "desktop") {
+    await page.screenshot({
+      path: path.join(SCREENSHOT_DIR, "07-settings-ai-config-desktop.png"),
+      fullPage: true,
+    });
+  }
+
+  // Test Replace Key -> input opens, Save replaces cleanly
+  await page.getByRole("button", { name: "Replace Key" }).click();
+  const replacementSecret = "AIzaSyReplacementMockKey00001";
+  await page.getByLabel("Gemini API Key").fill(replacementSecret);
+  await page.getByRole("button", { name: "Save API Key" }).click();
+  await expect(page.getByText(/Gemini API key encrypted and saved/i)).toBeVisible();
+
+  // Remove Key cleanly restores Not Configured (if no .env key set)
+  await page.getByRole("button", { name: "Remove Key" }).click();
+  await expect(page.getByLabel("Gemini API Key")).toBeVisible();
 });

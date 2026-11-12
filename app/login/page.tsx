@@ -19,7 +19,7 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function handleDemoLogin(demoRole: "homeowner" | "contractor") {
+  async function handleDemoLogin(demoRole: "homeowner" | "contractor" | "admin") {
     setError("");
     setLoading(true);
     try {
@@ -30,7 +30,9 @@ function LoginForm() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Demo sign-in failed");
-      if (isGuidedEntry && demoRole === "homeowner") {
+      if (demoRole === "admin") {
+        router.push("/settings");
+      } else if (isGuidedEntry && demoRole === "homeowner") {
         router.push("/projects/new?guided=1");
       } else {
         router.push(demoRole === "contractor" ? "/contractor" : "/dashboard");
@@ -61,7 +63,13 @@ function LoginForm() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Authentication failed");
       const userRole = json.user?.role;
-      router.push(userRole === "contractor" ? "/contractor" : "/dashboard");
+      router.push(
+        userRole === "admin"
+          ? "/settings"
+          : userRole === "contractor"
+          ? "/contractor"
+          : "/dashboard"
+      );
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
@@ -84,7 +92,7 @@ function LoginForm() {
             {isGuidedEntry ? "Start your PunchPay Sandbox Session" : "Sign in to PunchPay"}
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Separate authenticated sessions for homeowners and repair contractors.
+            Separate authenticated sessions for homeowners, repair contractors, and administrators.
           </p>
         </div>
 
@@ -129,9 +137,22 @@ function LoginForm() {
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
           </div>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={loading}
+            onClick={() => handleDemoLogin("admin")}
+            className="mt-2.5 w-full justify-between"
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <ShieldCheck className="h-4 w-4 text-slate-700" />
+              System Administrator (AI Credentials)
+            </span>
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
           <p className="mt-2.5 text-[11px] text-slate-500">
             Homeowner: <code>homeowner@punchpay.demo</code> · Contractor:{" "}
-            <code>contractor@punchpay.demo</code>
+            <code>contractor@punchpay.demo</code> · Admin: <code>admin@punchpay.demo</code>
           </p>
         </Card>
 

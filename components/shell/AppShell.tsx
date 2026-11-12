@@ -50,7 +50,9 @@ export function AppShell({
   const [switching, setSwitching] = useState(false);
 
   const primaryNav =
-    user.role === "homeowner"
+    user.role === "admin"
+      ? [{ href: "/settings", label: "AI & System Settings", icon: Settings }]
+      : user.role === "homeowner"
       ? [
           { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
           { href: "/reviews", label: "Evidence Reviews", icon: FileSearch },
@@ -69,7 +71,7 @@ export function AppShell({
       ? [{ href: "/projects/new", label: "New Project", icon: FolderKanban }]
       : []),
     { href: "/playground", label: "Fault Lab", icon: FlaskConical },
-    { href: "/settings", label: "Settings", icon: Settings },
+    ...(user.role !== "admin" ? [{ href: "/settings", label: "Settings", icon: Settings }] : []),
   ];
 
   const notifications = projects.flatMap((p) =>
@@ -78,9 +80,11 @@ export function AppShell({
         user.role === "homeowner"
           ? ["EVIDENCE_SUBMITTED", "AI_REVIEWED"].includes(t.work_status) &&
             t.payment_status === "AUTHORIZED"
-          : ["PENDING_EVIDENCE", "BEFORE_SUBMITTED", "CORRECTIONS_REQUESTED"].includes(
+          : user.role === "contractor"
+          ? ["PENDING_EVIDENCE", "BEFORE_SUBMITTED", "CORRECTIONS_REQUESTED"].includes(
               t.work_status
             )
+          : false
       )
       .map((t) => ({
         id: t.id,
@@ -329,24 +333,31 @@ export function AppShell({
                 href="/settings"
                 className={cn(
                   "hidden md:inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
-                  config.ai.configured
+                  config.ai.activeTier === "gemini_live"
                     ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : config.ai.configured
+                    ? "border-blue-200 bg-blue-50 text-blue-800"
                     : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                 )}
               >
-                {config.ai.configured ? (
+                {config.ai.activeTier === "gemini_live" ? (
+                  <>
+                    <CheckCircle2 className="h-3 w-3" />
+                    <span>Gemini AI · {config.ai.model}</span>
+                  </>
+                ) : config.ai.configured ? (
                   <>
                     <CheckCircle2 className="h-3 w-3" />
                     <span>
                       {config.ai.provider === "ollama"
-                        ? `Ollama · ${config.ai.model}`
+                        ? `Local AI · ${config.ai.model}`
                         : `${config.ai.provider} · ${config.ai.model}`}
                     </span>
                   </>
                 ) : (
                   <>
                     <Cpu className="h-3 w-3 text-slate-400" />
-                    <span>AI: Manual Checklist</span>
+                    <span>AI: Guided Review</span>
                   </>
                 )}
               </Link>

@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { HttpError } from "../errors";
 import { assertPaymentTransition, assertWorkTransition } from "../payments/state-machine";
 import type {
+  AIAnalysisSource,
   AIProviderType,
   AIReviewRecord,
   DecisionRecord,
@@ -16,6 +17,7 @@ import type {
   Project,
   ProjectBundle,
   RepairTask,
+  ServerCredentialRecord,
   TaskBundle,
   UserRole,
   WorkStatus,
@@ -45,7 +47,7 @@ export class SupabaseRepository implements PunchPayRepository {
 
   async ensureSeedProfiles(): Promise<void> {
     if (this.seeded) return;
-    for (const acct of [DEMO_ACCOUNTS.homeowner, DEMO_ACCOUNTS.contractor]) {
+    for (const acct of [DEMO_ACCOUNTS.homeowner, DEMO_ACCOUNTS.contractor, DEMO_ACCOUNTS.admin]) {
       await this.client.from("profiles").upsert(
         {
           id: acct.id,
@@ -216,6 +218,7 @@ export class SupabaseRepository implements PunchPayRepository {
 
   async listProjectsForUser(user: Profile): Promise<ProjectBundle[]> {
     await this.ensureSeedProfiles();
+    if (user.role === "admin") return [];
     const col = user.role === "homeowner" ? "homeowner_id" : "contractor_id";
     const { data: projects } = await this.client
       .from("projects")
@@ -528,6 +531,11 @@ export class SupabaseRepository implements PunchPayRepository {
     task_id: string;
     model: string;
     provider: AIProviderType;
+    analysis_source: AIAnalysisSource;
+    is_genuine_ai: boolean;
+    analyzed_evidence_ids: string[];
+    image_hashes: string[];
+    input_fingerprint: string | null;
     structured_findings: AIReviewRecord["structured_findings"];
     recommendation: AIReviewRecord["recommendation"];
   }): Promise<AIReviewRecord> {
@@ -545,6 +553,11 @@ export class SupabaseRepository implements PunchPayRepository {
         task_id: input.task_id,
         model: input.model,
         provider: input.provider,
+        analysis_source: input.analysis_source,
+        is_genuine_ai: input.is_genuine_ai,
+        analyzed_evidence_ids: input.analyzed_evidence_ids,
+        image_hashes: input.image_hashes,
+        input_fingerprint: input.input_fingerprint,
         structured_findings: input.structured_findings,
         recommendation: input.recommendation,
         review_version: nextVersion,
@@ -553,6 +566,44 @@ export class SupabaseRepository implements PunchPayRepository {
       .single();
     if (error || !data) throw new HttpError(500, "Failed to save AI inspection report");
     return data as AIReviewRecord;
+  }
+
+  async getServerCredential(provider: "gemini"): Promise<ServerCredentialRecord | null> {
+    const { data } = await this.client
+      .from("server_credentials")
+      .select("*")
+      .eq("provider", provider)
+      .maybeSingle();
+    return (data as ServerCredentialRecord) ?? null;
+  }
+
+  async saveServerCredential(input: {
+    provider: "gemini";
+    encrypted_payload: string;
+    model: string | null;
+    updated_by: string;
+  }): Promise<ServerCredentialRecord> {
+    const updated_at = new Date().toISOString();
+    const { data, error } = await this.client
+      .from("server_credentials")
+      .upsert(
+        {
+          provider: input.provider,
+          encrypted_payload: input.encrypted_payload,
+          model: input.model,
+          updated_by: input.updated_by,
+          updated_at,
+        },
+        { onConflict: "provider" }
+      )
+      .select("*")
+      .single();
+    if (error || !data) throw new HttpError(500, "Failed to store encrypted API credential.");
+    return data as ServerCredentialRecord;
+  }
+
+  async deleteServerCredential(provider: "gemini"): Promise<void> {
+    await this.client.from("server_credentials").delete().eq("provider", provider);
   }
 
   async claimPaymentState(
